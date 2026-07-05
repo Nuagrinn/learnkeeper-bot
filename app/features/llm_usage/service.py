@@ -32,6 +32,11 @@ class LlmUsageRecorder(Protocol):
         request_label: str = "",
         input_chars: int = 0,
         output_chars: int = 0,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        estimated_usd: float | None = None,
+        usage_source: str = "estimated",
         duration_ms: int = 0,
         success: bool = True,
         error: str = "",
@@ -52,6 +57,11 @@ class NoopLlmUsageRecorder:
         request_label: str = "",
         input_chars: int = 0,
         output_chars: int = 0,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        estimated_usd: float | None = None,
+        usage_source: str = "estimated",
         duration_ms: int = 0,
         success: bool = True,
         error: str = "",
@@ -121,6 +131,11 @@ class LlmUsageService:
         request_label: str = "",
         input_chars: int = 0,
         output_chars: int = 0,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        estimated_usd: float | None = None,
+        usage_source: str = "estimated",
         duration_ms: int = 0,
         success: bool = True,
         error: str = "",
@@ -128,14 +143,31 @@ class LlmUsageService:
         created_at: datetime | None = None,
     ) -> LlmUsageEvent:
         created = (created_at or datetime.now()).replace(microsecond=0)
-        input_tokens = _estimate_tokens(input_chars)
-        output_tokens = _estimate_tokens(output_chars)
-        total_tokens = input_tokens + output_tokens
-        estimated_usd = _estimate_usd(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            price_config=self.price_config,
+        safe_input_tokens = (
+            max(0, int(input_tokens))
+            if input_tokens is not None
+            else _estimate_tokens(input_chars)
         )
+        safe_output_tokens = (
+            max(0, int(output_tokens))
+            if output_tokens is not None
+            else _estimate_tokens(output_chars)
+        )
+        safe_total_tokens = (
+            max(0, int(total_tokens))
+            if total_tokens is not None
+            else safe_input_tokens + safe_output_tokens
+        )
+        safe_estimated_usd = (
+            round(max(0, float(estimated_usd)), 6)
+            if estimated_usd is not None
+            else _estimate_usd(
+                input_tokens=safe_input_tokens,
+                output_tokens=safe_output_tokens,
+                price_config=self.price_config,
+            )
+        )
+        clean_usage_source = (usage_source or "").strip() or "estimated"
         event = LlmUsageEvent(
             id=uuid.uuid4().hex[:12],
             provider=provider.strip() or "unknown",
@@ -143,13 +175,13 @@ class LlmUsageService:
             model=model.strip(),
             prompt_version=prompt_version.strip(),
             request_label=request_label.strip()[:240],
-            usage_source="estimated",
+            usage_source=clean_usage_source[:80],
             input_chars=max(0, int(input_chars)),
             output_chars=max(0, int(output_chars)),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            estimated_usd=estimated_usd,
+            input_tokens=safe_input_tokens,
+            output_tokens=safe_output_tokens,
+            total_tokens=safe_total_tokens,
+            estimated_usd=safe_estimated_usd,
             duration_ms=max(0, int(duration_ms)),
             success=bool(success),
             error=error.strip()[:1000],

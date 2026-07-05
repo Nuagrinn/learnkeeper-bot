@@ -261,6 +261,7 @@ class ClaudeCliQuizGenerator:
             ) from exc
 
         duration = time.perf_counter() - started
+        reported_usage = _claude_cli_reported_usage(proc.stdout)
         log.info(
             "Claude CLI finished topic_id=%s returncode=%s duration_sec=%.1f stdout_chars=%s stderr_chars=%s",
             topic.id,
@@ -283,6 +284,7 @@ class ClaudeCliQuizGenerator:
                 duration_sec=duration,
                 success=False,
                 error=detail or f"Claude CLI failed with returncode {proc.returncode}",
+                reported_usage=reported_usage,
                 metadata={
                     "stage": "cli",
                     "returncode": proc.returncode,
@@ -317,6 +319,7 @@ class ClaudeCliQuizGenerator:
                 duration_sec=duration,
                 success=False,
                 error=str(exc),
+                reported_usage=reported_usage,
                 metadata={"stage": "parse", "source_files": len(materials.files)},
             )
             raise
@@ -327,6 +330,7 @@ class ClaudeCliQuizGenerator:
             output_chars=len(proc.stdout or ""),
             duration_sec=duration,
             success=True,
+            reported_usage=reported_usage,
             metadata={
                 "stage": "success",
                 "source_files": len(materials.files),
@@ -364,6 +368,7 @@ class ClaudeCliQuizGenerator:
         duration_sec: float,
         success: bool,
         error: str = "",
+        reported_usage: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         event_metadata = {
@@ -371,6 +376,10 @@ class ClaudeCliQuizGenerator:
             "topic_title": topic.title,
             "question_count": question_count,
         }
+        usage = reported_usage or {}
+        reported_metadata = usage.get("metadata")
+        if isinstance(reported_metadata, dict):
+            event_metadata.update(reported_metadata)
         if metadata:
             event_metadata.update(metadata)
         try:
@@ -382,6 +391,11 @@ class ClaudeCliQuizGenerator:
                 request_label=f"{topic.id} | {topic.title}",
                 input_chars=input_chars,
                 output_chars=output_chars,
+                input_tokens=_optional_int(usage.get("input_tokens")),
+                output_tokens=_optional_int(usage.get("output_tokens")),
+                total_tokens=_optional_int(usage.get("total_tokens")),
+                estimated_usd=_optional_float(usage.get("estimated_usd")),
+                usage_source=str(usage.get("usage_source") or "estimated"),
                 duration_ms=int(duration_sec * 1000),
                 success=success,
                 error=error,
@@ -525,6 +539,69 @@ def _raise_if_denied_structured_output(text: str) -> None:
         raise QuizGenerationError(
             "Claude CLI could not return structured JSON because StructuredOutput was denied"
         )
+
+
+def _claude_cli_reported_usage(stdout: str | None) -> dict[str, Any]:
+    text = (stdout or "").strip()
+    if not text:
+        return {}
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    usage = raw.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    direct_input_tokens = _optional_int(usage.get("input_tokens")) or 0
+    cache_creation_tokens = _optional_int(usage.get("cache_creation_input_tokens")) or 0
+    cache_read_tokens = _optional_int(usage.get("cache_read_input_tokens")) or 0
+    output_tokens = _optional_int(usage.get("output_tokens")) or 0
+    input_tokens = direct_input_tokens + cache_creation_tokens + cache_read_tokens
+    total_tokens = input_tokens + output_tokens
+    total_cost_usd = _optional_float(raw.get("total_cost_usd"))
+
+    if total_tokens <= 0 and total_cost_usd is None:
+        return {}
+
+    metadata = {
+        "claude_total_cost_usd": total_cost_usd,
+        "claude_input_tokens": direct_input_tokens,
+        "claude_cache_creation_input_tokens": cache_creation_tokens,
+        "claude_cache_read_input_tokens": cache_read_tokens,
+        "claude_output_tokens": output_tokens,
+        "claude_duration_ms": _optional_int(raw.get("duration_ms")),
+        "claude_duration_api_ms": _optional_int(raw.get("duration_api_ms")),
+        "claude_service_tier": usage.get("service_tier") if usage else None,
+    }
+    return {
+        "usage_source": "claude_cli_reported",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "estimated_usd": total_cost_usd,
+        "metadata": {key: value for key, value in metadata.items() if value is not None},
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(0, float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _json_object_slice(text: str) -> str:

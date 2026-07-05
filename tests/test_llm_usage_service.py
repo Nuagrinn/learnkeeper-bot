@@ -52,6 +52,34 @@ class LlmUsageServiceTest(unittest.TestCase):
         self.assertEqual(1, len(recent))
         self.assertEqual("b01", recent[0].metadata["topic_id"])
 
+    def test_records_reported_tokens_and_cost(self) -> None:
+        service = LlmUsageService(
+            self.db,
+            price_config=LlmUsagePriceConfig(
+                input_usd_per_1m_tokens=3,
+                output_usd_per_1m_tokens=15,
+            ),
+        )
+
+        event = service.record(
+            provider="claude_cli",
+            feature="quiz_generation",
+            input_chars=400,
+            output_chars=80,
+            input_tokens=1000,
+            output_tokens=200,
+            total_tokens=1200,
+            estimated_usd=0.4691918,
+            usage_source="claude_cli_reported",
+            created_at=datetime(2026, 7, 5, 10, 0),
+        )
+
+        self.assertEqual(1000, event.input_tokens)
+        self.assertEqual(200, event.output_tokens)
+        self.assertEqual(1200, event.total_tokens)
+        self.assertEqual(0.469192, event.estimated_usd)
+        self.assertEqual("claude_cli_reported", event.usage_source)
+
     def test_stats_for_periods_aggregates_failures_and_features(self) -> None:
         service = LlmUsageService(
             self.db,

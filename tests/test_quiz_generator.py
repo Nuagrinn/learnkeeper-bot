@@ -19,6 +19,15 @@ class RecordingRunner:
         return subprocess.CompletedProcess(cmd, 0, stdout=self.stdout, stderr="")
 
 
+class RecordingUsageRecorder:
+    def __init__(self):
+        self.calls: list[dict[str, object]] = []
+
+    def record(self, **kwargs):
+        self.calls.append(kwargs)
+        return None
+
+
 class ClaudeCliQuizGeneratorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.topic = RepoTopic(
@@ -116,6 +125,57 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual("Что возвращает len(slice)?", questions[0].text)
+
+    def test_records_claude_cli_reported_usage(self) -> None:
+        payload = {
+            "questions": [
+                {
+                    "text": "Что возвращает len(slice)?",
+                    "options": ["Длину", "Емкость", "Адрес", "Тип"],
+                    "correct_index": 0,
+                    "explanation": "len возвращает текущую длину слайса.",
+                    "source_refs": ["base-go/slices.md"],
+                }
+            ]
+        }
+        wrapper = {
+            "type": "result",
+            "subtype": "success",
+            "result": json.dumps(payload, ensure_ascii=False),
+            "total_cost_usd": 0.4691918,
+            "duration_ms": 106346,
+            "duration_api_ms": 108185,
+            "usage": {
+                "input_tokens": 7,
+                "cache_creation_input_tokens": 45341,
+                "cache_read_input_tokens": 106656,
+                "output_tokens": 9937,
+                "service_tier": "standard",
+            },
+        }
+        usage_recorder = RecordingUsageRecorder()
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=RecordingRunner(json.dumps(wrapper, ensure_ascii=False)),
+            allow_paid_api=False,
+            usage_recorder=usage_recorder,
+        )
+
+        generator.generate(
+            topic=self.topic,
+            materials=self.materials,
+            question_count=1,
+        )
+
+        call = usage_recorder.calls[0]
+        self.assertEqual("claude_cli_reported", call["usage_source"])
+        self.assertEqual(152004, call["input_tokens"])
+        self.assertEqual(9937, call["output_tokens"])
+        self.assertEqual(161941, call["total_tokens"])
+        self.assertEqual(0.4691918, call["estimated_usd"])
+        metadata = call["metadata"]
+        self.assertEqual(45341, metadata["claude_cache_creation_input_tokens"])
+        self.assertEqual("standard", metadata["claude_service_tier"])
 
     def test_parses_claude_content_list_wrapper(self) -> None:
         payload = {
