@@ -7,6 +7,7 @@ BRANCH="${BOT_GIT_BRANCH:-main}"
 SERVICE="${SERVICE_NAME:-learnkeeper.service}"
 
 cd "$APP_DIR"
+git config --global --add safe.directory "$APP_DIR" || true
 
 echo "Fetching bot repository..."
 git fetch "$REMOTE" "$BRANCH"

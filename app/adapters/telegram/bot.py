@@ -242,6 +242,32 @@ def _services(context: ContextTypes.DEFAULT_TYPE) -> AppServices:
     return context.application.bot_data["services"]
 
 
+async def _sync_materials_repo(context: ContextTypes.DEFAULT_TYPE, reason: str) -> None:
+    services = _services(context)
+    settings = services.settings
+    if not settings.repo_pull_before_read:
+        return
+
+    try:
+        result = await asyncio.to_thread(
+            services.repo.pull_latest,
+            remote=settings.repo_git_remote,
+            branch=settings.repo_git_branch,
+            timeout_seconds=settings.repo_pull_timeout_seconds,
+        )
+    except Exception:
+        log.exception("Repo pull before %s failed unexpectedly", reason)
+        return
+
+    detail = result.detail.replace("\n", " ")[:240] if result.detail else ""
+    log.info(
+        "Repo pull before %s status=%s detail=%s",
+        reason,
+        result.status,
+        detail,
+    )
+
+
 def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
     return int(context.application.bot_data["owner_id"])
 
@@ -506,6 +532,7 @@ async def _show_topics(
     query: str = "",
 ) -> None:
     services = _services(context)
+    await _sync_materials_repo(context, "topics")
     items = (
         services.repo.search_topics(query, limit=20)
         if query
@@ -816,6 +843,7 @@ def _quiz_report_keyboard(session_id: str, questions, answers) -> InlineKeyboard
 
 async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     services = _services(context)
+    await _sync_materials_repo(context, "review-blocks")
     grouped = _ready_review_topics_by_section(services)
     if not grouped:
         await _answer_long(
@@ -834,6 +862,7 @@ async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _edit_review_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "review-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
@@ -927,6 +956,7 @@ def _review_existing_keyboard(topic_id: str) -> InlineKeyboardMarkup:
 
 
 async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "instant-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await _answer_long(
@@ -945,6 +975,7 @@ async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def _edit_instant_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "instant-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
@@ -2777,6 +2808,7 @@ async def send_daily_quiz_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    await _sync_materials_repo(context, "daily-quiz")
     topic = services.daily_quiz.random_ready_topic()
     if not topic:
         log.warning("Daily quiz enabled, but no ready topics with materials found")

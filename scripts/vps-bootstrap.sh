@@ -53,15 +53,19 @@ chown -R "$APP_USER:$APP_USER" "$BASE_DIR"
 if [ ! -d "$APP_DIR/.git" ]; then
   sudo -u "$APP_USER" git clone --branch "$BOT_GIT_BRANCH" "$BOT_REPO_URL" "$APP_DIR"
 else
+  sudo -u "$APP_USER" git config --global --add safe.directory "$APP_DIR" || true
   sudo -u "$APP_USER" git -C "$APP_DIR" pull --ff-only origin "$BOT_GIT_BRANCH"
 fi
+sudo -u "$APP_USER" git config --global --add safe.directory "$APP_DIR" || true
 
 if [ -n "$MATERIALS_REPO_URL" ]; then
   if [ ! -d "$MATERIALS_DIR/.git" ]; then
     sudo -u "$APP_USER" git clone --branch "$MATERIALS_GIT_BRANCH" "$MATERIALS_REPO_URL" "$MATERIALS_DIR"
   else
+    sudo -u "$APP_USER" git config --global --add safe.directory "$MATERIALS_DIR" || true
     sudo -u "$APP_USER" git -C "$MATERIALS_DIR" pull --ff-only origin "$MATERIALS_GIT_BRANCH"
   fi
+  sudo -u "$APP_USER" git config --global --add safe.directory "$MATERIALS_DIR" || true
 fi
 
 sudo -u "$APP_USER" python3 -m venv "$APP_DIR/.venv"

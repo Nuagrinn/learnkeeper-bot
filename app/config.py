@@ -68,6 +68,7 @@ class Settings:
     repo_git_remote: str
     repo_git_branch: str
     repo_pull_before_quiz: bool
+    repo_pull_before_read: bool
     repo_pull_timeout_seconds: int
     topic_inbox_agent_provider: str
     topic_inbox_agent_model: str
@@ -228,6 +229,13 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         os.getenv("REPO_PULL_BEFORE_QUIZ")
         or env_file.get("REPO_PULL_BEFORE_QUIZ", "false")
     )
+    repo_pull_before_read = _env_bool(
+        os.getenv("REPO_PULL_BEFORE_READ")
+        or env_file.get(
+            "REPO_PULL_BEFORE_READ",
+            "true" if repo_pull_before_quiz else "false",
+        )
+    )
     raw_repo_pull_timeout = (
         os.getenv("REPO_PULL_TIMEOUT_SECONDS")
         or env_file.get("REPO_PULL_TIMEOUT_SECONDS", "120")
@@ -308,6 +316,7 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         repo_git_remote=repo_git_remote,
         repo_git_branch=repo_git_branch,
         repo_pull_before_quiz=repo_pull_before_quiz,
+        repo_pull_before_read=repo_pull_before_read,
         repo_pull_timeout_seconds=repo_pull_timeout_seconds,
         topic_inbox_agent_provider=topic_inbox_agent_provider,
         topic_inbox_agent_model=topic_inbox_agent_model,
