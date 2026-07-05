@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import html
 import logging
+import subprocess
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from time import perf_counter
@@ -46,7 +47,7 @@ from app.adapters.telegram.formatters import (
     format_quiz_report,
     split_message,
 )
-from app.config import Settings, load_settings
+from app.config import PROJECT_ROOT, Settings, load_settings
 from app.core.db import Database
 from app.core.repo import RepoService
 from app.features.llm_usage.service import (
@@ -95,6 +96,7 @@ MENU_MISTAKE_WORK = "menu_mistake_work"
 MENU_MISTAKE_WORK_DONE = "menu_mistake_work_done"
 MENU_DAILY_SETTINGS = "menu_daily_settings"
 MENU_LLM_USAGE = "menu_llm_usage"
+MENU_CHANGELOG = "menu_changelog"
 CANCEL_REVIEW_PREFIX = "cancel_review:"
 CONFIRM_CANCEL_REVIEW_PREFIX = "confirm_cancel_review:"
 ABORT_CANCEL_REVIEW = "abort_cancel_review"
@@ -119,6 +121,7 @@ BTN_REVIEW_ADD = "➕ Добавить повтор"
 BTN_INSTANT_QUIZ = "▶️ Пройти тест сейчас"
 BTN_DAILY_QUIZ = "🌅 Ежедневные тесты"
 BTN_LLM_USAGE = "📊 Токены LLM"
+BTN_CHANGELOG = "📝 Changelog"
 BTN_REVIEW_CANCEL = "🗑 Удалить повтор"
 BTN_STUDY_TOPICS = "💡 Темы на изучение"
 BTN_TOPIC_ADD = "➕ Добавить тему"
@@ -135,6 +138,7 @@ LEGACY_MENU_BUTTONS = {
     "Пройти тест сейчас",
     "Ежедневные тесты",
     "Токены LLM",
+    "Changelog",
     "Удалить повтор",
     "Идеи",
     "Темы на изучение",
@@ -157,6 +161,7 @@ MENU_BUTTONS = {
     BTN_INSTANT_QUIZ,
     BTN_DAILY_QUIZ,
     BTN_LLM_USAGE,
+    BTN_CHANGELOG,
     BTN_REVIEW_CANCEL,
     BTN_STUDY_TOPICS,
     BTN_TOPIC_ADD,
@@ -168,6 +173,10 @@ MENU_BUTTONS = {
     BTN_DUE,
     BTN_HELP,
 } | LEGACY_MENU_BUTTONS
+
+
+LAST_NOTIFIED_VERSION_KEY = "app_version_last_notified"
+CHANGELOG_LIMIT = 8
 
 
 class AppServices:
@@ -235,6 +244,109 @@ def _services(context: ContextTypes.DEFAULT_TYPE) -> AppServices:
 
 def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
     return int(context.application.bot_data["owner_id"])
+
+
+def _get_app_setting(services: AppServices, key: str, default: str = "") -> str:
+    with services.db.session() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return row["value"] if row else default
+
+
+def _set_app_setting(services: AppServices, key: str, value: str) -> None:
+    now = datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
+    with services.db.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, now),
+        )
+
+
+def _git_output(*args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), *args],
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
+
+
+def _current_version() -> str:
+    return _git_output("rev-parse", "--short=12", "HEAD") or "unknown"
+
+
+def _current_version_subject() -> str:
+    return _git_output("show", "-s", "--format=%s", "HEAD") or "локальная версия"
+
+
+def _current_version_date() -> str:
+    return _git_output("show", "-s", "--format=%ci", "HEAD") or ""
+
+
+def _format_changelog_text() -> str:
+    version = _current_version()
+    subject = _current_version_subject()
+    date = _current_version_date()
+    lines = [
+        "<b>Changelog</b>",
+        "",
+        f"<b>Текущая версия:</b> <code>{html.escape(version, quote=False)}</code>",
+        f"<b>Коммит:</b> {html.escape(subject, quote=False)}",
+    ]
+    if date:
+        lines.append(f"<b>Дата:</b> <code>{html.escape(date, quote=False)}</code>")
+
+    raw_log = _git_output(
+        "log",
+        f"-n{CHANGELOG_LIMIT}",
+        "--date=short",
+        "--pretty=format:%h%x09%ad%x09%s",
+    )
+    if raw_log:
+        lines.extend(["", "<b>Последние изменения</b>"])
+        for raw_line in raw_log.splitlines():
+            parts = raw_line.split("\t", 2)
+            if len(parts) == 3:
+                commit, commit_date, message = parts
+                lines.append(
+                    f"• <code>{html.escape(commit, quote=False)}</code> "
+                    f"<code>{html.escape(commit_date, quote=False)}</code> "
+                    f"{html.escape(message, quote=False)}"
+                )
+    else:
+        lines.extend(["", "Git-история недоступна в текущем окружении."])
+
+    return "\n".join(lines)
+
+
+def _format_version_update_text() -> str:
+    version = _current_version()
+    subject = _current_version_subject()
+    date = _current_version_date()
+    lines = [
+        "<b>LearnKeeper обновлен и перезапущен</b>",
+        "",
+        f"<b>Версия:</b> <code>{html.escape(version, quote=False)}</code>",
+        f"<b>Коммит:</b> {html.escape(subject, quote=False)}",
+    ]
+    if date:
+        lines.append(f"<b>Дата:</b> <code>{html.escape(date, quote=False)}</code>")
+    return "\n".join(lines)
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
@@ -525,6 +637,7 @@ def _settings_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(BTN_DAILY_QUIZ, callback_data=MENU_DAILY_SETTINGS)],
             [InlineKeyboardButton(BTN_LLM_USAGE, callback_data=MENU_LLM_USAGE)],
+            [InlineKeyboardButton(BTN_CHANGELOG, callback_data=MENU_CHANGELOG)],
         ]
     )
 
@@ -923,6 +1036,16 @@ async def _show_llm_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             services.llm_usage.stats_for_periods(),
             prices_configured=services.llm_usage.prices_configured,
         ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_settings_menu_keyboard(),
+    )
+
+
+async def _show_changelog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _format_changelog_text(),
         parse_mode=ParseMode.HTML,
         reply_markup=_settings_menu_keyboard(),
     )
@@ -1690,6 +1813,23 @@ async def menu_llm_usage_callback(update: Update, context: ContextTypes.DEFAULT_
             services.llm_usage.stats_for_periods(),
             prices_configured=services.llm_usage.prices_configured,
         ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_settings_menu_keyboard(),
+    )
+
+
+async def menu_changelog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await query.edit_message_text(
+        _format_changelog_text(),
         parse_mode=ParseMode.HTML,
         reply_markup=_settings_menu_keyboard(),
     )
@@ -2563,6 +2703,9 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text in (BTN_LLM_USAGE, "Токены LLM"):
         await _show_llm_usage(update, context)
         return
+    if text in (BTN_CHANGELOG, "Changelog"):
+        await _show_changelog(update, context)
+        return
     if text in (BTN_STUDY_TOPICS, "Темы на изучение"):
         await _show_study_topics_menu(update, context)
         return
@@ -2654,6 +2797,34 @@ async def send_daily_quiz_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("Daily quiz offer sent topic_id=%s date=%s", topic.id, today.isoformat())
 
 
+async def notify_version_update(context: ContextTypes.DEFAULT_TYPE) -> None:
+    services = _services(context)
+    owner_id = _owner_id(context)
+    version = _current_version()
+    if version == "unknown":
+        log.info("Version notification skipped: git version is unknown")
+        return
+
+    last_notified = _get_app_setting(services, LAST_NOTIFIED_VERSION_KEY, "")
+    if last_notified == version:
+        log.info("Version notification skipped: version=%s already notified", version)
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=owner_id,
+            text=_format_version_update_text(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_main_keyboard(),
+        )
+    except Exception:
+        log.exception("Failed to send version update notification version=%s", version)
+        return
+
+    _set_app_setting(services, LAST_NOTIFIED_VERSION_KEY, version)
+    log.info("Version update notification sent version=%s previous=%s", version, last_notified or "-")
+
+
 def _daily_quiz_timezone(settings: Settings) -> ZoneInfo:
     try:
         return ZoneInfo(settings.daily_quiz_timezone)
@@ -2694,6 +2865,7 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(menu_mistake_work_done_callback, pattern=f"^{MENU_MISTAKE_WORK_DONE}$"))
     app.add_handler(CallbackQueryHandler(menu_daily_settings_callback, pattern=f"^{MENU_DAILY_SETTINGS}$"))
     app.add_handler(CallbackQueryHandler(menu_llm_usage_callback, pattern=f"^{MENU_LLM_USAGE}$"))
+    app.add_handler(CallbackQueryHandler(menu_changelog_callback, pattern=f"^{MENU_CHANGELOG}$"))
     app.add_handler(CallbackQueryHandler(daily_quiz_toggle_callback, pattern=f"^{DAILY_QUIZ_TOGGLE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_start_callback, pattern=f"^{DAILY_QUIZ_START_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_skip_callback, pattern=f"^{DAILY_QUIZ_SKIP_PREFIX}"))
@@ -2733,6 +2905,11 @@ def build_application(settings: Settings, services: AppServices) -> Application:
             interval=settings.review_tick_seconds,
             first=10,
             name="due-review-notifications",
+        )
+        app.job_queue.run_once(
+            notify_version_update,
+            when=5,
+            name="version-update-notification",
         )
         app.job_queue.run_daily(
             send_daily_quiz_offer,
