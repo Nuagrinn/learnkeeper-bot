@@ -1,0 +1,9 @@
+[Unit]
+Description=Backup LearnKeeper SQLite database
+
+[Service]
+Type=oneshot
+User=learnkeeper
+Group=learnkeeper
+WorkingDirectory=/opt/learnkeeper/learnkeeper-bot
+ExecStart=/bin/bash /opt/learnkeeper/learnkeeper-bot/scripts/vps-backup-sqlite.sh

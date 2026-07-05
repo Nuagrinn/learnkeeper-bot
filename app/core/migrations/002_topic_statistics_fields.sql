@@ -1,0 +1,4 @@
+ALTER TABLE topics ADD COLUMN section TEXT NOT NULL DEFAULT '';
+ALTER TABLE topics ADD COLUMN order_index INTEGER;
+ALTER TABLE topics ADD COLUMN material_fingerprint TEXT NOT NULL DEFAULT '';
+

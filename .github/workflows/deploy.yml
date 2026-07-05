@@ -1,0 +1,38 @@
+name: Deploy LearnKeeper
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/learnkeeper_vps
+          chmod 600 ~/.ssh/learnkeeper_vps
+
+      - name: Deploy on VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          APP_DIR: ${{ secrets.APP_DIR }}
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          VPS_PORT="${VPS_PORT:-22}"
+          APP_DIR="${APP_DIR:-/opt/learnkeeper/learnkeeper-bot}"
+          ssh -i ~/.ssh/learnkeeper_vps \
+            -o StrictHostKeyChecking=accept-new \
+            -p "$VPS_PORT" \
+            "$VPS_USER@$VPS_HOST" \
+            "cd '$APP_DIR' && bash scripts/vps-deploy.sh"
