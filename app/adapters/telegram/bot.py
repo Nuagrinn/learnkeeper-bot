@@ -81,6 +81,8 @@ ABORT_INSTANT_QUIZ = "abort_instant_quiz"
 DAILY_QUIZ_TOGGLE_PREFIX = "daily_quiz_toggle:"
 DAILY_QUIZ_START_PREFIX = "daily_quiz_start:"
 DAILY_QUIZ_SKIP_PREFIX = "daily_quiz_skip:"
+QUIZ_SIZE_PREFIX = "quiz_size:"
+ABORT_QUIZ_SIZE = "abort_quiz_size"
 MENU_REVIEW = "menu_review"
 MENU_TESTS = "menu_tests"
 MENU_PROCESSING = "menu_processing"
@@ -112,6 +114,11 @@ MISTAKE_WORK_OPEN_PREFIX = "mistake_work_open:"
 MISTAKE_WORK_DONE_PREFIX = "mistake_work_done:"
 MISTAKE_WORK_DELETE_PREFIX = "mistake_work_delete:"
 GENERATION_FRAMES = ("⏳", "⌛")
+QUIZ_SIZE_OPTIONS = (5, 10, 20, 30)
+QUIZ_SIZE_REVIEW = "review"
+QUIZ_SIZE_INSTANT_TOPIC = "instant_topic"
+QUIZ_SIZE_INSTANT_BLOCK = "instant_block"
+QUIZ_SIZE_DAILY_TOPIC = "daily_topic"
 BTN_TOPICS = "📚 Темы"
 BTN_REVIEW_MENU = "🔁 Повторы"
 BTN_TEST_MENU = "🧪 Тесты"
@@ -1487,6 +1494,52 @@ def _generation_wait_text(
     )
 
 
+def _quiz_size_text(*, title: str, scope: str) -> str:
+    return "\n".join(
+        [
+            f"<b>{html.escape(scope, quote=False)}</b>",
+            "",
+            f"<b>Тема:</b> {html.escape(title, quote=False)}",
+            "",
+            "Сколько вопросов сделать?",
+        ]
+    )
+
+
+def _quiz_size_keyboard(mode: str, target: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for left, right in zip(QUIZ_SIZE_OPTIONS[::2], QUIZ_SIZE_OPTIONS[1::2]):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{left} вопросов",
+                    callback_data=f"{QUIZ_SIZE_PREFIX}{mode}:{target}:{left}",
+                ),
+                InlineKeyboardButton(
+                    f"{right} вопросов",
+                    callback_data=f"{QUIZ_SIZE_PREFIX}{mode}:{target}:{right}",
+                ),
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_QUIZ_SIZE)])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_quiz_size_choice(
+    query,
+    *,
+    title: str,
+    scope: str,
+    mode: str,
+    target: str,
+) -> None:
+    await query.edit_message_text(
+        _quiz_size_text(title=title, scope=scope),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_quiz_size_keyboard(mode, target),
+    )
+
+
 async def _animate_generation_message(query, *, topic_title: str, question_count: int) -> None:
     index = 0
     started_at = perf_counter()
@@ -1517,18 +1570,18 @@ async def _start_instant_quiz(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     topic_title: str,
+    question_count: int,
     start_call,
 ) -> None:
-    services = _services(context)
     log.info(
         "Starting instant quiz from Telegram topic_title=%s questions=%s",
         topic_title,
-        services.quiz_question_count,
+        question_count,
     )
     await query.edit_message_text(
         _generation_wait_text(
             topic_title=topic_title,
-            question_count=services.quiz_question_count,
+            question_count=question_count,
             frame=GENERATION_FRAMES[0],
         )
     )
@@ -1536,13 +1589,13 @@ async def _start_instant_quiz(
         _animate_generation_message(
             query,
             topic_title=topic_title,
-            question_count=services.quiz_question_count,
+            question_count=question_count,
         )
     )
     try:
         result = await asyncio.to_thread(
             start_call,
-            question_count=services.quiz_question_count,
+            question_count=question_count,
         )
     except QuizGenerationError as exc:
         log.exception("Instant quiz generation failed topic_title=%s", topic_title)
@@ -1569,6 +1622,83 @@ async def _start_instant_quiz(
         "Instant quiz session ready session_id=%s topic_id=%s questions=%s",
         result.session.id,
         result.session.topic_id,
+        result.session.question_count,
+    )
+    await query.edit_message_text(
+        text=format_quiz_question(result.session, result.question),
+        reply_markup=_answer_keyboard(result.session, result.question),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _start_review_quiz(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    task_id: str,
+    question_count: int,
+) -> None:
+    services = _services(context)
+    try:
+        task = services.review_tasks.get_task(task_id)
+    except ValueError:
+        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
+        return
+
+    log.info(
+        "Starting quiz from Telegram callback task_id=%s topic_id=%s questions=%s",
+        task.id,
+        task.topic_id,
+        question_count,
+    )
+    await query.edit_message_text(
+        _generation_wait_text(
+            topic_title=task.topic_title,
+            question_count=question_count,
+            frame=GENERATION_FRAMES[0],
+        )
+    )
+    animation_task = asyncio.create_task(
+        _animate_generation_message(
+            query,
+            topic_title=task.topic_title,
+            question_count=question_count,
+        )
+    )
+    try:
+        result = await asyncio.to_thread(
+            services.quiz.start_session,
+            task_id,
+            question_count=question_count,
+        )
+    except QuizGenerationError as exc:
+        animation_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await animation_task
+        log.exception("Quiz generation failed for task_id=%s", task_id)
+        await query.edit_message_text(
+            "Не удалось сгенерировать тест.\n\n"
+            f"Причина: {exc}\n\n"
+            "Попробуй позже или проверь генерацию через `quiz-preview`."
+        )
+        return
+    except ValueError:
+        animation_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await animation_task
+        log.exception("Failed to start quiz session for task_id=%s", task_id)
+        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
+        return
+    finally:
+        if not animation_task.done():
+            animation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await animation_task
+
+    log.info(
+        "Quiz session ready task_id=%s session_id=%s questions=%s",
+        task_id,
+        result.session.id,
         result.session.question_count,
     )
     await query.edit_message_text(
@@ -1905,14 +2035,12 @@ async def daily_quiz_start_callback(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text("Тема ежедневного теста уже не найдена. Завтра выберу новую.")
         return
 
-    await _start_instant_quiz(
+    await _show_quiz_size_choice(
         query,
-        context,
-        topic_title=topic.title,
-        start_call=lambda *, question_count: services.quiz.start_instant_topic_session(
-            topic.id,
-            question_count=question_count,
-        ),
+        title=topic.title,
+        scope="Ежедневный тест",
+        mode=QUIZ_SIZE_DAILY_TOPIC,
+        target=topic.id,
     )
 
 
@@ -1982,14 +2110,12 @@ async def instant_topic_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("Тема не найдена. Нажми «Пройти тест сейчас» еще раз.")
         return
 
-    await _start_instant_quiz(
+    await _show_quiz_size_choice(
         query,
-        context,
-        topic_title=topic.title,
-        start_call=lambda *, question_count: services.quiz.start_instant_topic_session(
-            topic.id,
-            question_count=question_count,
-        ),
+        title=topic.title,
+        scope="Пройти тест сейчас",
+        mode=QUIZ_SIZE_INSTANT_TOPIC,
+        target=topic.id,
     )
 
 
@@ -2018,14 +2144,12 @@ async def instant_block_all_callback(update: Update, context: ContextTypes.DEFAU
         return
 
     section, _topics = sections[index]
-    await _start_instant_quiz(
+    await _show_quiz_size_choice(
         query,
-        context,
-        topic_title=f"Блок: {section}",
-        start_call=lambda *, question_count: services.quiz.start_instant_block_session(
-            section,
-            question_count=question_count,
-        ),
+        title=f"Блок: {section}",
+        scope="Пройти тест сейчас",
+        mode=QUIZ_SIZE_INSTANT_BLOCK,
+        target=str(index),
     )
 
 
@@ -2061,62 +2185,101 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
         return
 
-    log.info("Starting quiz from Telegram callback task_id=%s topic_id=%s", task.id, task.topic_id)
-    await query.edit_message_text(
-        _generation_wait_text(
-            topic_title=task.topic_title,
-            question_count=services.quiz_question_count,
-            frame=GENERATION_FRAMES[0],
-        )
+    await _show_quiz_size_choice(
+        query,
+        title=task.topic_title,
+        scope="Повторение",
+        mode=QUIZ_SIZE_REVIEW,
+        target=task.id,
     )
-    animation_task = asyncio.create_task(
-        _animate_generation_message(
-            query,
-            topic_title=task.topic_title,
-            question_count=services.quiz_question_count,
-        )
-    )
-    try:
-        result = await asyncio.to_thread(
-            services.quiz.start_session,
-            task_id,
-            question_count=services.quiz_question_count,
-        )
-    except QuizGenerationError as exc:
-        animation_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await animation_task
-        log.exception("Quiz generation failed for task_id=%s", task_id)
-        await query.edit_message_text(
-            "Не удалось сгенерировать тест.\n\n"
-            f"Причина: {exc}\n\n"
-            "Попробуй позже или проверь генерацию через `quiz-preview`."
-        )
-        return
-    except ValueError:
-        animation_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await animation_task
-        log.exception("Failed to start quiz session for task_id=%s", task_id)
-        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
-        return
-    finally:
-        if not animation_task.done():
-            animation_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await animation_task
 
-    log.info(
-        "Quiz session ready task_id=%s session_id=%s questions=%s",
-        task_id,
-        result.session.id,
-        result.session.question_count,
-    )
-    await query.edit_message_text(
-        text=format_quiz_question(result.session, result.question),
-        reply_markup=_answer_keyboard(result.session, result.question),
-        parse_mode=ParseMode.HTML,
-    )
+
+async def quiz_size_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    payload = (query.data or "").removeprefix(QUIZ_SIZE_PREFIX)
+    try:
+        mode, target, raw_count = payload.split(":", 2)
+        question_count = int(raw_count)
+    except ValueError:
+        await query.answer("Не понял размер теста.", show_alert=True)
+        return
+    if question_count not in QUIZ_SIZE_OPTIONS:
+        await query.answer("Неподдерживаемое количество вопросов.", show_alert=True)
+        return
+
+    await query.answer(f"{question_count} вопросов")
+    services = _services(context)
+    if mode == QUIZ_SIZE_REVIEW:
+        await _start_review_quiz(
+            query,
+            context,
+            task_id=target,
+            question_count=question_count,
+        )
+        return
+
+    if mode in (QUIZ_SIZE_INSTANT_TOPIC, QUIZ_SIZE_DAILY_TOPIC):
+        topic = services.repo.get_topic(target.strip().lower())
+        if not topic:
+            await query.edit_message_text("Тема не найдена. Попробуй выбрать тест заново.")
+            return
+        await _start_instant_quiz(
+            query,
+            context,
+            topic_title=topic.title,
+            question_count=question_count,
+            start_call=lambda *, question_count: services.quiz.start_instant_topic_session(
+                topic.id,
+                question_count=question_count,
+            ),
+        )
+        return
+
+    if mode == QUIZ_SIZE_INSTANT_BLOCK:
+        try:
+            index = int(target)
+        except ValueError:
+            await query.edit_message_text("Не понял выбранный блок. Нажми «Пройти тест сейчас» еще раз.")
+            return
+        grouped = _ready_review_topics_by_section(services)
+        sections = list(grouped.items())
+        if index < 0 or index >= len(sections):
+            await query.edit_message_text("Список блоков устарел. Нажми «Пройти тест сейчас» еще раз.")
+            return
+        section, _topics = sections[index]
+        await _start_instant_quiz(
+            query,
+            context,
+            topic_title=f"Блок: {section}",
+            question_count=question_count,
+            start_call=lambda *, question_count: services.quiz.start_instant_block_session(
+                section,
+                question_count=question_count,
+            ),
+        )
+        return
+
+    await query.edit_message_text("Не понял тип теста. Попробуй начать заново.")
+
+
+async def abort_quiz_size_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer("Ок")
+    await query.edit_message_text("Тест не запущен.")
 
 
 async def quiz_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2906,6 +3069,8 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(instant_block_callback, pattern=f"^{INSTANT_BLOCK_PREFIX}"))
     app.add_handler(CallbackQueryHandler(instant_topic_callback, pattern=f"^{INSTANT_TOPIC_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_instant_quiz_callback, pattern=f"^{ABORT_INSTANT_QUIZ}$"))
+    app.add_handler(CallbackQueryHandler(quiz_size_callback, pattern=f"^{QUIZ_SIZE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(abort_quiz_size_callback, pattern=f"^{ABORT_QUIZ_SIZE}$"))
     app.add_handler(CallbackQueryHandler(start_review_callback, pattern=f"^{START_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(quiz_answer_callback, pattern=f"^{QUIZ_ANSWER_PREFIX}"))
     app.add_handler(CallbackQueryHandler(mistake_review_callback, pattern=f"^{MISTAKE_REVIEW_PREFIX}"))
