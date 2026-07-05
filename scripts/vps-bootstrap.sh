@@ -12,6 +12,7 @@ MATERIALS_REPO_URL="${MATERIALS_REPO_URL:-}"
 MATERIALS_GIT_BRANCH="${MATERIALS_GIT_BRANCH:-main}"
 WHISPER_MODEL="${WHISPER_MODEL:-base}"
 INSTALL_CLAUDE_CLI="${INSTALL_CLAUDE_CLI:-1}"
+NODE_MAJOR="${NODE_MAJOR:-22}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run as root or through sudo." >&2
@@ -31,13 +32,16 @@ apt-get install -y \
   curl \
   ffmpeg \
   git \
-  nodejs \
-  npm \
   python3 \
   python3-pip \
   python3-venv \
   sqlite3 \
   sudo
+
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE "^v${NODE_MAJOR}\\."; then
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+  apt-get install -y nodejs
+fi
 
 if ! id "$APP_USER" >/dev/null 2>&1; then
   useradd --create-home --home-dir "$APP_HOME" --shell /bin/bash "$APP_USER"
