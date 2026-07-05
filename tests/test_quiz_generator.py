@@ -78,7 +78,8 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
         self.assertIn("--output-format", call["cmd"])
         self.assertIn("--json-schema", call["cmd"])
         self.assertIn("--no-session-persistence", call["cmd"])
-        self.assertIn("--disallowedTools", call["cmd"])
+        self.assertNotIn("--permission-mode", call["cmd"])
+        self.assertNotIn("--disallowedTools", call["cmd"])
         self.assertIn("Сгенерируй тест", call["input"])
         self.assertIn("len, cap, append", call["input"])
         env = call["env"]
@@ -146,6 +147,28 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual("Что делает append?", questions[0].text)
+
+    def test_reports_structured_output_denial(self) -> None:
+        wrapper = {
+            "type": "result",
+            "subtype": "success",
+            "result": (
+                "The tool call was denied. I'm currently restricted to plan mode, "
+                "which blocks non-plan tool calls including `StructuredOutput`."
+            ),
+        }
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=RecordingRunner(json.dumps(wrapper, ensure_ascii=False)),
+            allow_paid_api=False,
+        )
+
+        with self.assertRaisesRegex(QuizGenerationError, "StructuredOutput was denied"):
+            generator.generate(
+                topic=self.topic,
+                materials=self.materials,
+                question_count=1,
+            )
 
     def test_requires_oauth_token_when_paid_api_is_disabled(self) -> None:
         generator = ClaudeCliQuizGenerator(

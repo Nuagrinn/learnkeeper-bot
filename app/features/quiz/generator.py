@@ -179,10 +179,6 @@ class ClaudeCliQuizGenerator:
             "--json-schema",
             json.dumps(QUIZ_JSON_SCHEMA, ensure_ascii=False),
             "--no-session-persistence",
-            "--permission-mode",
-            "plan",
-            "--disallowedTools",
-            "*",
         ]
         if self.model:
             cmd.extend(["--model", self.model])
@@ -506,6 +502,7 @@ def _coerce_payload(value: Any) -> dict[str, Any]:
         for key in ("result", "content", "message", "text"):
             nested = value.get(key)
             if isinstance(nested, str):
+                _raise_if_denied_structured_output(nested)
                 return _extract_payload(nested)
             if isinstance(nested, dict):
                 return _coerce_payload(nested)
@@ -518,6 +515,16 @@ def _coerce_payload(value: Any) -> dict[str, Any]:
                 if joined:
                     return _extract_payload(joined)
     raise QuizGenerationError("Claude CLI output does not contain questions JSON")
+
+
+def _raise_if_denied_structured_output(text: str) -> None:
+    normalized = text.lower()
+    if "structuredoutput" in normalized and (
+        "denied" in normalized or "plan mode" in normalized or "permission" in normalized
+    ):
+        raise QuizGenerationError(
+            "Claude CLI could not return structured JSON because StructuredOutput was denied"
+        )
 
 
 def _json_object_slice(text: str) -> str:
