@@ -534,9 +534,9 @@ async def _show_topics(
     services = _services(context)
     await _sync_materials_repo(context, "topics")
     items = (
-        services.repo.search_topics(query, limit=20)
+        services.repo.search_topics(query, limit=30)
         if query
-        else services.repo.list_topics()[:20]
+        else services.repo.list_topics()
     )
     await _answer_long(update, format_topics(items))
 
