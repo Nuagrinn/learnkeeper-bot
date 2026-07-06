@@ -58,6 +58,23 @@ class TopicInboxServiceTest(unittest.TestCase):
         self.assertEqual("добавь отдельный блок System Design: Transactional Outbox", item.raw_text)
         self.assertEqual([item], service.list_active())
 
+    def test_create_item_strips_agent_meta_title_and_inbox_section(self) -> None:
+        agent = StubTopicAgent(
+            SimpleNamespace(
+                title="Нормализация темы: Изучить rate limiter как паттерн отказоустойчивости",
+                section="inbox",
+                summary="Нормализовано агентом.",
+                provider="stub",
+                model="stub-model",
+            )
+        )
+        service = TopicInboxService(self.db, agent)
+
+        item = service.create_item("Патерна отказа устойчивости рейт-лиметр", source="voice")
+
+        self.assertEqual("Изучить rate limiter как паттерн отказоустойчивости", item.title)
+        self.assertEqual("", item.section)
+
     def test_delete_item_hides_it_from_active_list(self) -> None:
         agent = StubTopicAgent(
             SimpleNamespace(

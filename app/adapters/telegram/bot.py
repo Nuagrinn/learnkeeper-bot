@@ -130,9 +130,9 @@ BTN_DAILY_QUIZ = "🌅 Ежедневные тесты"
 BTN_LLM_USAGE = "📊 Токены LLM"
 BTN_CHANGELOG = "📝 Changelog"
 BTN_REVIEW_CANCEL = "🗑 Удалить повтор"
-BTN_STUDY_TOPICS = "💡 Темы на изучение"
-BTN_TOPIC_ADD = "➕ Добавить тему"
-BTN_TOPIC_INBOX = "📥 Идеи тем"
+BTN_STUDY_TOPICS = "💡 Inbox идей"
+BTN_TOPIC_ADD = "➕ Добавить идею"
+BTN_TOPIC_INBOX = "📥 Список идей"
 BTN_MISTAKE_WORK = "🧩 Работа над ошибками"
 BTN_MISTAKE_WORK_ACTIVE = "📋 Активные отчеты"
 BTN_MISTAKE_WORK_DONE = "✅ Проработанные"
@@ -150,7 +150,10 @@ LEGACY_MENU_BUTTONS = {
     "Идеи",
     "Темы на изучение",
     "Добавить тему",
+    "Inbox идей",
+    "Добавить идею",
     "Идеи тем",
+    "Список идей",
     "Работа над ошибками",
     "Активные отчеты",
     "Проработанные",
@@ -585,7 +588,7 @@ async def _show_ideas_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _send_section_menu(
         update,
         "🗂 Проработка",
-        "Идеи новых тем и отдельная очередь отчетов после ошибок в тестах.",
+        "Inbox идей, будущие задачи и отдельная очередь отчетов после ошибок в тестах.",
         _ideas_menu_keyboard(),
     )
 
@@ -593,8 +596,8 @@ async def _show_ideas_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def _show_study_topics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_section_menu(
         update,
-        "💡 Темы на изучение",
-        "Голосовые и текстовые идеи, которые потом руками переносим в interview-review.",
+        "💡 Inbox идей",
+        "Голосовые и текстовые мысли: что изучить, почитать, реализовать, написать или доработать.",
         _study_topics_menu_keyboard(),
     )
 
@@ -685,7 +688,7 @@ async def _create_topic_inbox_item(
 ) -> None:
     clean_query = query.strip()
     if not clean_query:
-        await _answer_long(update, "Не вижу тему. Попробуй написать или надиктовать еще раз.")
+        await _answer_long(update, "Не вижу идею. Попробуй написать или надиктовать еще раз.")
         return
 
     log.info(
@@ -696,7 +699,7 @@ async def _create_topic_inbox_item(
     wait_message = None
     if update.message:
         wait_message = await update.message.reply_text(
-            "<b>Принял идею темы</b>\n\n"
+            "<b>Принял идею</b>\n\n"
             "Формулирую через агента и сохраняю в inbox.",
             parse_mode=ParseMode.HTML,
             reply_markup=_main_keyboard(),
@@ -715,7 +718,7 @@ async def _create_topic_inbox_item(
             source,
             perf_counter() - started_at,
         )
-        text = "Не смог сохранить идею темы.\n\nПроверь логи локального запуска."
+        text = "Не смог сохранить идею.\n\nПроверь логи локального запуска."
         if wait_message:
             await _edit_or_reply(update, wait_message, text, parse_mode=ParseMode.HTML)
         else:
@@ -1810,8 +1813,8 @@ async def menu_study_topics_callback(update: Update, context: ContextTypes.DEFAU
 
     await query.answer()
     await query.edit_message_text(
-        "<b>💡 Темы на изучение</b>\n\n"
-        "Сохраняй сюда голосовые и текстовые идеи для будущей ручной проработки.",
+        "<b>💡 Inbox идей</b>\n\n"
+        "Сохраняй сюда голосовые и текстовые мысли: что изучить, почитать, реализовать, написать или доработать.",
         parse_mode=ParseMode.HTML,
         reply_markup=_study_topics_menu_keyboard(),
     )
@@ -2900,14 +2903,14 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text in (BTN_CHANGELOG, "Changelog"):
         await _show_changelog(update, context)
         return
-    if text in (BTN_STUDY_TOPICS, "Темы на изучение"):
+    if text in (BTN_STUDY_TOPICS, "Темы на изучение", "Inbox идей"):
         await _show_study_topics_menu(update, context)
         return
-    if text in (BTN_TOPIC_ADD, "Добавить тему"):
+    if text in (BTN_TOPIC_ADD, "Добавить тему", "Добавить идею"):
         context.user_data["awaiting_study_topic"] = True
         await _answer_long(update, format_study_topic_prompt())
         return
-    if text in (BTN_TOPIC_INBOX, "Идеи тем"):
+    if text in (BTN_TOPIC_INBOX, "Идеи тем", "Список идей"):
         await _show_topic_inbox(update, context)
         return
     if text in (BTN_MISTAKE_WORK, BTN_MISTAKE_WORK_ACTIVE, "Работа над ошибками", "Активные отчеты"):
@@ -2928,7 +2931,7 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Я пока не обрабатываю свободный текст как команду.\n\n"
         f"Повторы лежат в разделе <b>{BTN_REVIEW_MENU}</b>.\n"
         f"Быстрые и ежедневные тесты лежат в разделе <b>{BTN_TEST_MENU}</b>.\n"
-        f"Новые темы лежат в разделе <b>{BTN_IDEAS_MENU}</b>.",
+        f"Новые идеи лежат в разделе <b>{BTN_IDEAS_MENU}</b>.",
     )
 
 

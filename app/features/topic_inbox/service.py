@@ -37,8 +37,9 @@ class TopicInboxService:
             summary = f"Agent failed unexpectedly, saved raw request: {exc}"
         else:
             title = _clean_inline(result.title) or clean_raw
-            section = _clean_inline(result.section) or section
+            section = _sanitize_section(result.section) or section
             title = _strip_section_prefix(title, section)
+            title = _strip_meta_title_prefix(title)
             summary = result.summary
             provider = result.provider
             model = result.model
@@ -172,3 +173,20 @@ def _strip_section_prefix(title: str, section: str) -> str:
     pattern = rf"^{re.escape(section)}\s*[:\-—]\s*"
     stripped = re.sub(pattern, "", title, flags=re.IGNORECASE).strip()
     return stripped or title
+
+
+def _sanitize_section(section: str) -> str:
+    clean = _clean_inline(section)
+    if clean.lower() in {"inbox", "topic", "theme", "тема", "идея", "темы", "идеи"}:
+        return ""
+    return clean[:80]
+
+
+def _strip_meta_title_prefix(title: str) -> str:
+    clean = _clean_inline(title)
+    return re.sub(
+        r"^(?:нормализац(?:ия|ию)\s+)?(?:темы|идеи|запроса)\s*[:\-—]\s*",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip() or clean

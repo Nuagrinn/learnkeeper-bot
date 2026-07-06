@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from app.config import PROJECT_ROOT
 from app.features.llm_usage.service import LlmUsageRecorder, NoopLlmUsageRecorder
-from app.features.quiz.generator import PAID_API_ENV_VARS
+from app.features.quiz.generator import PAID_API_ENV_VARS, _claude_cli_reported_usage
 
 
 log = logging.getLogger(__name__)
@@ -179,6 +179,7 @@ class ClaudeCliTopicInboxAgent:
             ) from exc
 
         duration = time.perf_counter() - started
+        reported_usage = _claude_cli_reported_usage(proc.stdout)
         log.info(
             "Topic inbox normalizer CLI finished returncode=%s duration_sec=%.1f stdout_chars=%s stderr_chars=%s",
             proc.returncode,
@@ -195,6 +196,7 @@ class ClaudeCliTopicInboxAgent:
                 duration_sec=duration,
                 success=False,
                 error=detail or f"Claude CLI failed with returncode {proc.returncode}",
+                reported_usage=reported_usage,
                 metadata={"stage": "cli", "returncode": proc.returncode},
             )
             raise TopicInboxAgentError(
@@ -217,6 +219,7 @@ class ClaudeCliTopicInboxAgent:
                 duration_sec=duration,
                 success=False,
                 error=str(exc),
+                reported_usage=reported_usage,
                 metadata={"stage": "parse"},
             )
             raise
@@ -224,10 +227,12 @@ class ClaudeCliTopicInboxAgent:
         title, fallback_section = _basic_normalize(request)
         normalized = _clean_inline(str(payload.get("title") or "")) or title
         section = _clean_inline(str(payload.get("section") or "")) or fallback_section
+        section = _sanitize_section(section)
         normalized = _strip_section_prefix(normalized, section)
+        normalized = _strip_meta_title_prefix(normalized)
         summary = _clean_inline(str(payload.get("summary") or ""))
         if not summary:
-            summary = "Claude нормализовал формулировку для inbox."
+            summary = "Claude сформулировал идею для inbox."
         log.info(
             "Topic inbox normalizer parsed title=%s section=%s duration_sec=%.1f",
             normalized,
@@ -240,6 +245,7 @@ class ClaudeCliTopicInboxAgent:
             output_chars=len(proc.stdout or ""),
             duration_sec=duration,
             success=True,
+            reported_usage=reported_usage,
             metadata={
                 "stage": "success",
                 "title": normalized,
@@ -278,9 +284,14 @@ class ClaudeCliTopicInboxAgent:
         duration_sec: float,
         success: bool,
         error: str = "",
+        reported_usage: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         event_metadata = {"request_len": len(request)}
+        usage = reported_usage or {}
+        reported_metadata = usage.get("metadata")
+        if isinstance(reported_metadata, dict):
+            event_metadata.update(reported_metadata)
         if metadata:
             event_metadata.update(metadata)
         try:
@@ -292,6 +303,11 @@ class ClaudeCliTopicInboxAgent:
                 request_label=request[:120],
                 input_chars=input_chars,
                 output_chars=output_chars,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                estimated_usd=usage.get("estimated_usd"),
+                usage_source=str(usage.get("usage_source") or "estimated"),
                 duration_ms=int(duration_sec * 1000),
                 success=success,
                 error=error,
@@ -303,31 +319,49 @@ class ClaudeCliTopicInboxAgent:
 
 def _system_prompt() -> str:
     return (
-        "Ты нормализатор inbox-идей LearnKeeper.\n"
-        "Твоя задача: превратить свободную фразу пользователя в аккуратную "
-        "формулировку темы для будущего ручного добавления в учебный репозиторий.\n\n"
+        "Ты редактор inbox-идей LearnKeeper.\n"
+        "Пользователь голосом или текстом быстро скидывает мысли на будущее: "
+        "что изучить, почитать, реализовать, написать, доработать или проверить. "
+        "Твоя задача: превратить сырую фразу в аккуратную, понятную идею для будущей ручной обработки.\n\n"
         "Жесткие правила:\n"
         "- НЕ анализируй репозиторий;\n"
         "- НЕ читай файлы;\n"
         "- НЕ проверяй, покрыта тема уже или нет;\n"
         "- НЕ предлагай diff, commit, git-команды или изменения файлов;\n"
-        "- НЕ веди диалог и НЕ задавай уточняющих вопросов.\n\n"
+        "- НЕ веди диалог и НЕ задавай уточняющих вопросов;\n"
+        "- НЕ пиши в title служебные слова: 'нормализация', 'нормализовать', 'тема запроса', 'идея темы';\n"
+        "- НЕ ставь section='inbox', 'topic', 'theme' или похожие технические слова.\n\n"
         "Верни только JSON по schema.\n\n"
-        "Как нормализовать:\n"
-        "- убери слова команды: добавь, изучить, надо бы, новая тема, отдельный блок;\n"
+        "Как формулировать title:\n"
+        "- сохрани исходный смысл, не сужай идею до одного случайного термина;\n"
+        "- title должен быть коротким, но полноценным: 4-12 слов;\n"
+        "- если это учебная идея, начинай с действия: 'Изучить ...', 'Разобраться с ...';\n"
+        "- если это книга/статья/курс, начинай с 'Почитать ...' или 'Пройти ...';\n"
+        "- если это продуктовая/кодовая работа, начинай с 'Реализовать ...', 'Доработать ...', 'Написать ...';\n"
+        "- можно сохранять формат 'область: конкретика', если так красивее.\n\n"
+        "Как формулировать section:\n"
+        "- используй мягкую категорию действия: Изучить, Почитать, Реализовать, Написать, Доработать, Проверить;\n"
+        "- если пользователь явно назвал предметную область или блок, можно поставить ее: System Design, Базы данных, Go, Архитектура;\n"
+        "- если не уверен, оставь пустую строку.\n\n"
+        "Дополнительно:\n"
+        "- убери слова команды: добавь, изучить, надо бы, новая тема, отдельный блок, нужно;\n"
         "- исправь очевидные STT-ошибки только если уверен;\n"
-        "- сохрани технические термины: Go, PostgreSQL, Kafka, Outbox, CAP, pprof;\n"
-        "- если пользователь явно указал блок перед двоеточием или словом 'блок', "
-        "положи его в section, а в title оставь только тему;\n"
-        "- если блок не очевиден, section оставь пустым;\n"
-        "- title должен быть коротким, пригодным для строки в каталоге.\n"
+        "- сохрани технические термины: Go, PostgreSQL, Kafka, Outbox, CAP, pprof, rate limiter;\n"
+        "- summary одним предложением объясняет, что потом сделать с идеей.\n\n"
+        "Примеры:\n"
+        "raw: 'Патерна отказа устойчивости рейт-лиметр'\n"
+        'json: {"title":"Изучить rate limiter как паттерн отказоустойчивости","section":"Изучить","summary":"Разобрать назначение, алгоритмы и сценарии применения rate limiter в отказоустойчивых системах."}\n'
+        "raw: 'надо почитать книгу про паттерны отказоустойчивости'\n"
+        'json: {"title":"Почитать книгу про паттерны отказоустойчивости","section":"Почитать","summary":"Найти подходящую книгу или главы и вынести идеи в материалы."}\n'
+        "raw: 'добавить фичу на выбор сложности теста'\n"
+        'json: {"title":"Реализовать выбор сложности теста","section":"Реализовать","summary":"Продумать UX и добавить настройку сложности при запуске теста."}\n'
     )
 
 
 def _user_prompt(request: str) -> str:
     payload = json.dumps({"raw_request": request}, ensure_ascii=False)
     return (
-        "Нормализуй идею темы для SQLite inbox LearnKeeper.\n\n"
+        "Сформулируй сырую inbox-идею LearnKeeper как понятную будущую задачу или тему.\n\n"
         f"REQUEST_JSON:\n{payload}\n\n"
         "Верни JSON вида:\n"
         '{"title":"...","section":"...","summary":"..."}'
@@ -410,8 +444,9 @@ def _basic_normalize(value: str) -> tuple[str, str]:
         if 2 <= len(left.strip()) <= 80 and right.strip():
             section = _clean_inline(left)
             clean = _clean_inline(right)
-    title = _strip_section_prefix(clean, section)
-    return title or _clean_inline(value), section[:80]
+    section = _sanitize_section(section)
+    title = _strip_meta_title_prefix(_strip_section_prefix(clean, section))
+    return title or _strip_meta_title_prefix(_clean_inline(value)), section[:80]
 
 
 def _clean_inline(value: str) -> str:
@@ -424,6 +459,23 @@ def _strip_section_prefix(title: str, section: str) -> str:
     pattern = rf"^{re.escape(section)}\s*[:\-—]\s*"
     stripped = re.sub(pattern, "", title, flags=re.IGNORECASE).strip()
     return stripped or title
+
+
+def _sanitize_section(section: str) -> str:
+    clean = _clean_inline(section)
+    if clean.lower() in {"inbox", "topic", "theme", "тема", "идея", "темы", "идеи"}:
+        return ""
+    return clean[:80]
+
+
+def _strip_meta_title_prefix(title: str) -> str:
+    clean = _clean_inline(title)
+    return re.sub(
+        r"^(?:нормализац(?:ия|ию)\s+)?(?:темы|идеи|запроса)\s*[:\-—]\s*",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    ).strip() or clean
 
 
 def _preview(value: str | None, *, limit: int = 800) -> str:

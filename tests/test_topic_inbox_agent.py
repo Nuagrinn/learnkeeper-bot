@@ -52,6 +52,30 @@ class TopicInboxAgentTest(unittest.TestCase):
         self.assertIn("--output-format", calls[0][0])
         self.assertNotIn("--permission-mode", calls[0][0])
 
+    def test_claude_agent_keeps_broad_idea_and_strips_meta_prefix(self) -> None:
+        def run_command(cmd, **kwargs):
+            payload = {
+                "title": "Нормализация темы: Изучить rate limiter как паттерн отказоустойчивости",
+                "section": "inbox",
+                "summary": "Разобрать назначение, алгоритмы и сценарии применения rate limiter.",
+            }
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"result": json.dumps(payload, ensure_ascii=False)}, ensure_ascii=False),
+                stderr="",
+            )
+
+        agent = ClaudeCliTopicInboxAgent(
+            claude_bin="claude",
+            allow_paid_api=True,
+            run_command=run_command,
+        )
+
+        result = agent.normalize("Патерна отказа устойчивости рейт-лиметр")
+
+        self.assertEqual("Изучить rate limiter как паттерн отказоустойчивости", result.title)
+        self.assertEqual("", result.section)
+
 
 if __name__ == "__main__":
     unittest.main()

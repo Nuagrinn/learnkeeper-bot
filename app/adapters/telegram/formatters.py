@@ -173,30 +173,30 @@ def format_cancel_review_done(task: ReviewTask) -> str:
 def format_study_topic_prompt() -> str:
     return "\n".join(
         [
-            "<b>Какую тему сохранить в inbox?</b>",
+            "<b>Какую идею сохранить в inbox?</b>",
             "",
-            "Напиши название следующим сообщением, либо отправь голосовое.",
-            "Например: <code>System Design: Transactional Outbox</code>.",
+            "Напиши мысль следующим сообщением, либо отправь голосовое.",
+            "Например: <code>изучить rate limiter как паттерн отказоустойчивости</code>.",
             "",
-            "Я сформулирую ее через агента и сохраню в SQLite. "
-            "interview-review менять не буду.",
+            "Это может быть тема для изучения, книга, фича, заметка или задача. "
+            "Я аккуратно сформулирую ее через агента и сохраню в SQLite.",
         ]
     )
 
 
 def format_topic_inbox_created(item: TopicInboxItem) -> str:
     lines = [
-        "<b>Идея темы сохранена</b>",
+        "<b>Идея сохранена</b>",
         "",
-        f"<b>Тема:</b> {_h(item.title)}",
+        f"<b>Идея:</b> {_h(item.title)}",
     ]
     if item.section:
-        lines.append(f"<b>Блок:</b> {_h(item.section)}")
+        lines.append(f"<b>Категория:</b> {_h(item.section)}")
     lines.extend(
         [
             f"<b>ID:</b> <code>{_h(item.id)}</code>",
             "",
-            "Позже можешь открыть список через кнопку <b>Идеи тем</b> и перенести это в interview-review руками.",
+            "Позже можешь открыть список через кнопку <b>Список идей</b> и вручную решить, что с этим сделать.",
         ]
     )
     return "\n".join(lines)
@@ -204,16 +204,16 @@ def format_topic_inbox_created(item: TopicInboxItem) -> str:
 
 def format_topic_inbox_list(items: list[TopicInboxItem]) -> str:
     if not items:
-        return "<b>Идеи тем</b>\n\nСписок пуст."
+        return "<b>Список идей</b>\n\nСписок пуст."
     lines = [
-        "<b>Идеи тем</b>",
+        "<b>Список идей</b>",
         f"Всего: <b>{len(items)}</b>",
         "",
     ]
     for index, item in enumerate(items, start=1):
         lines.append(f"<b>{index}.</b> {_h(item.title)}")
         if item.section:
-            lines.append(f"<b>Блок:</b> {_h(item.section)}")
+            lines.append(f"<b>Категория:</b> {_h(item.section)}")
         lines.append(f"ID: <code>{_h(item.id)}</code>")
         lines.append("")
     lines.append("Кнопками ниже можно удалить уже перенесенные или лишние идеи.")
@@ -732,4 +732,3 @@ def split_message(text: str, *, limit: int = MAX_MESSAGE_LEN) -> list[str]:
 def now_label(now: datetime | None = None) -> str:
     value = now or datetime.now()
     return value.strftime("%Y-%m-%d %H:%M")
-
