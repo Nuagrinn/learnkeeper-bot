@@ -244,6 +244,106 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
                 question_count=1,
             )
 
+    def test_excludes_code_files_from_context_and_refs(self) -> None:
+        materials = TopicMaterials(
+            topic=RepoTopic(
+                id="cr1",
+                title="Data race",
+                source_paths=["cr/review.md", "cr/practice_service.go"],
+            ),
+            files=[
+                TopicMaterial(source_path="cr/review.md", content="# Data race\n\nОбщий доступ к памяти."),
+                TopicMaterial(source_path="cr/practice_service.go", content="package main\nfunc main() {}"),
+            ],
+            fingerprint="abc",
+        )
+        payload = {
+            "questions": [
+                {
+                    "text": "Что такое data race?",
+                    "options": ["Гонка", "Мьютекс", "Канал", "Горутина"],
+                    "correct_index": 0,
+                    "explanation": "Гонка данных при одновременном доступе.",
+                    "source_refs": ["cr/review.md"],
+                }
+            ]
+        }
+        runner = RecordingRunner(json.dumps(payload, ensure_ascii=False))
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=runner,
+            allow_paid_api=False,
+        )
+
+        generator.generate(topic=materials.topic, materials=materials, question_count=1)
+
+        sent = runner.calls[0]["input"]
+        self.assertIn("cr/review.md", sent)
+        self.assertNotIn("cr/practice_service.go", sent)
+        self.assertNotIn("package main", sent)
+
+    def test_rejects_code_source_ref_after_filtering(self) -> None:
+        materials = TopicMaterials(
+            topic=RepoTopic(
+                id="cr1",
+                title="Data race",
+                source_paths=["cr/review.md", "cr/practice_service.go"],
+            ),
+            files=[
+                TopicMaterial(source_path="cr/review.md", content="# Data race"),
+                TopicMaterial(source_path="cr/practice_service.go", content="package main"),
+            ],
+            fingerprint="abc",
+        )
+        payload = {
+            "questions": [
+                {
+                    "text": "Что делает эта строка кода?",
+                    "options": ["A", "B", "C", "D"],
+                    "correct_index": 0,
+                    "explanation": "x",
+                    "source_refs": ["cr/practice_service.go"],
+                }
+            ]
+        }
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=RecordingRunner(json.dumps(payload, ensure_ascii=False)),
+            allow_paid_api=False,
+        )
+
+        with self.assertRaises(QuizGenerationError):
+            generator.generate(topic=materials.topic, materials=materials, question_count=1)
+
+    def test_code_only_topic_keeps_code_as_fallback(self) -> None:
+        materials = TopicMaterials(
+            topic=RepoTopic(id="lc1", title="Live coding", source_paths=["review_task.go"]),
+            files=[TopicMaterial(source_path="review_task.go", content="package main")],
+            fingerprint="abc",
+        )
+        payload = {
+            "questions": [
+                {
+                    "text": "Как устроен этот service layer?",
+                    "options": ["A", "B", "C", "D"],
+                    "correct_index": 0,
+                    "explanation": "x",
+                    "source_refs": ["review_task.go"],
+                }
+            ]
+        }
+        runner = RecordingRunner(json.dumps(payload, ensure_ascii=False))
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=runner,
+            allow_paid_api=False,
+        )
+
+        questions = generator.generate(topic=materials.topic, materials=materials, question_count=1)
+
+        self.assertEqual(1, len(questions))
+        self.assertIn("review_task.go", runner.calls[0]["input"])
+
     def test_rejects_source_refs_outside_topic_materials(self) -> None:
         payload = {
             "questions": [
