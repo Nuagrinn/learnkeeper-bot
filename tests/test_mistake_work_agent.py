@@ -12,6 +12,15 @@ from app.features.mistake_work.agent import (
 )
 
 
+class RecordingUsageRecorder:
+    def __init__(self):
+        self.calls: list[dict[str, object]] = []
+
+    def record(self, **kwargs):
+        self.calls.append(kwargs)
+        return None
+
+
 def _request() -> MistakeReviewInput:
     return MistakeReviewInput(
         quiz_session_id="s1",
@@ -76,14 +85,29 @@ class MistakeReviewAgentTest(unittest.TestCase):
             }
             return SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps({"result": json.dumps(payload)}, ensure_ascii=False),
+                stdout=json.dumps(
+                    {
+                        "result": json.dumps(payload, ensure_ascii=False),
+                        "total_cost_usd": 0.123456,
+                        "usage": {
+                            "input_tokens": 10,
+                            "cache_creation_input_tokens": 20,
+                            "cache_read_input_tokens": 30,
+                            "output_tokens": 40,
+                            "service_tier": "standard",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
                 stderr="",
             )
 
+        usage_recorder = RecordingUsageRecorder()
         agent = ClaudeCliMistakeReviewAgent(
             claude_bin="claude",
             allow_paid_api=True,
             run_command=run_command,
+            usage_recorder=usage_recorder,
         )
 
         result = agent.analyze(_request())
@@ -92,7 +116,13 @@ class MistakeReviewAgentTest(unittest.TestCase):
         self.assertEqual("Разбор индексов PostgreSQL", result.title)
         self.assertEqual(str(PROJECT_ROOT), calls[0][1]["cwd"])
         self.assertIn("--json-schema", calls[0][0])
-        self.assertIn("--permission-mode", calls[0][0])
+        self.assertNotIn("--permission-mode", calls[0][0])
+        self.assertNotIn("--disallowedTools", calls[0][0])
+        usage_call = usage_recorder.calls[0]
+        self.assertEqual("claude_cli_reported", usage_call["usage_source"])
+        self.assertEqual(60, usage_call["input_tokens"])
+        self.assertEqual(40, usage_call["output_tokens"])
+        self.assertEqual(0.123456, usage_call["estimated_usd"])
 
 
 if __name__ == "__main__":

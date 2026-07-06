@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from app.config import PROJECT_ROOT
 from app.features.llm_usage.service import LlmUsageRecorder, NoopLlmUsageRecorder
-from app.features.quiz.generator import PAID_API_ENV_VARS
+from app.features.quiz.generator import PAID_API_ENV_VARS, _claude_cli_reported_usage
 
 
 log = logging.getLogger(__name__)
@@ -211,10 +211,6 @@ class ClaudeCliMistakeReviewAgent:
             "--json-schema",
             json.dumps(MISTAKE_REVIEW_JSON_SCHEMA, ensure_ascii=False),
             "--no-session-persistence",
-            "--permission-mode",
-            "plan",
-            "--disallowedTools",
-            "*",
         ]
         if self.model:
             cmd.extend(["--model", self.model])
@@ -282,6 +278,7 @@ class ClaudeCliMistakeReviewAgent:
             ) from exc
 
         duration = time.perf_counter() - started
+        reported_usage = _claude_cli_reported_usage(proc.stdout)
         log.info(
             "Mistake review agent CLI finished returncode=%s duration_sec=%.1f stdout_chars=%s stderr_chars=%s",
             proc.returncode,
@@ -298,6 +295,7 @@ class ClaudeCliMistakeReviewAgent:
                 duration_sec=duration,
                 success=False,
                 error=detail or f"Claude CLI failed with returncode {proc.returncode}",
+                reported_usage=reported_usage,
                 metadata={"stage": "cli", "returncode": proc.returncode},
             )
             raise MistakeReviewAgentError(
@@ -320,6 +318,7 @@ class ClaudeCliMistakeReviewAgent:
                 duration_sec=duration,
                 success=False,
                 error=str(exc),
+                reported_usage=reported_usage,
                 metadata={"stage": "parse"},
             )
             raise
@@ -338,6 +337,7 @@ class ClaudeCliMistakeReviewAgent:
             output_chars=len(proc.stdout or ""),
             duration_sec=duration,
             success=True,
+            reported_usage=reported_usage,
             metadata={
                 "stage": "success",
                 "title": result.title,
@@ -369,6 +369,7 @@ class ClaudeCliMistakeReviewAgent:
         duration_sec: float,
         success: bool,
         error: str = "",
+        reported_usage: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         event_metadata = {
@@ -376,6 +377,10 @@ class ClaudeCliMistakeReviewAgent:
             "topic_id": request.topic_id,
             "mistake_count": len(request.mistakes),
         }
+        usage = reported_usage or {}
+        reported_metadata = usage.get("metadata")
+        if isinstance(reported_metadata, dict):
+            event_metadata.update(reported_metadata)
         if metadata:
             event_metadata.update(metadata)
         try:
@@ -387,6 +392,11 @@ class ClaudeCliMistakeReviewAgent:
                 request_label=request.topic_title[:120],
                 input_chars=input_chars,
                 output_chars=output_chars,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                estimated_usd=usage.get("estimated_usd"),
+                usage_source=str(usage.get("usage_source") or "estimated"),
                 duration_ms=int(duration_sec * 1000),
                 success=success,
                 error=error,
