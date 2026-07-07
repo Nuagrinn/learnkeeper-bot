@@ -218,6 +218,37 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertIn("<b>A.</b> A1", text)
         self.assertIn("<b>D.</b> D1", text)
 
+    def test_format_quiz_question_renders_code_block_and_inline(self) -> None:
+        session = QuizSession(
+            id="s1",
+            task_id="t1",
+            topic_id="b01",
+            status="in_progress",
+            question_count=2,
+            current_question_no=1,
+            started_at=datetime(2026, 7, 3, 10, 0),
+            material_fingerprint="abc",
+            material_snapshot={},
+        )
+        question = QuizQuestion(
+            id="q1",
+            session_id="s1",
+            question_no=2,
+            text="Дан код:\n\n```go\nif a < b {\n  fmt.Println(a & b)\n}\n```\n\nЧто выведет `x`?",
+            options=["1", "100", "3", "0"],
+            correct_index=0,
+            explanation="Пояснение",
+            source_refs=["base-go/slices.md"],
+        )
+
+        text = format_quiz_question(session, question)
+
+        self.assertIn('<pre><code class="language-go">', text)
+        self.assertNotIn("```", text)
+        self.assertIn("a &lt; b", text)
+        self.assertIn("a &amp; b", text)
+        self.assertIn("<code>x</code>", text)
+
     def test_format_mistake_review_preview(self) -> None:
         report = MistakeReviewResult(
             title="Разбор индексов PostgreSQL",
@@ -249,6 +280,40 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertIn("🔴 высокая", text)
         self.assertIn("Что потом добавить в interview-review", text)
         self.assertIn("Можно сохранить", text)
+
+    def test_long_mistake_review_preview_splits_within_telegram_limit(self) -> None:
+        report = MistakeReviewResult(
+            title="Слайсы и массивы " * 40,
+            section="Базовый Go",
+            priority="high",
+            summary="Развёрнутое описание проблемы. " * 60,
+            diagnosis="Подробный диагноз с деталями. " * 300,
+            weak_concepts=[f"слабый концепт номер {i} с пояснением" for i in range(8)],
+            interview_review_suggestion={
+                "title": "Слайсы",
+                "target_section": "Базовый Go",
+                "details": "Что добавить в материалы. " * 300,
+            },
+            questions_to_revisit=[
+                {
+                    "question_no": i,
+                    "missed_point": "что было упущено в этом вопросе " * 80,
+                    "correct_idea": "верная идея с объяснением " * 80,
+                    "practice_prompt": "практическое задание для отработки " * 80,
+                }
+                for i in range(1, 6)
+            ],
+            provider="fake",
+            model="fake",
+        )
+
+        preview = format_mistake_review_preview(report)
+        self.assertGreater(len(preview), 4096)
+
+        chunks = split_message(preview)
+        self.assertGreaterEqual(len(chunks), 2)
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 4096)
 
     def test_format_mistake_work_list_and_item(self) -> None:
         item = MistakeWorkItem(

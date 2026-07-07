@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime
 
 from app.core.repo import RepoTopic
@@ -224,12 +225,12 @@ def format_mistake_review_preview(report: MistakeReviewResult) -> str:
     lines = [
         "<b>Разбор ошибок готов</b>",
         "",
-        f"<b>{_h(report.title)}</b>",
+        f"<b>{_h(_clip_inline(report.title, 300))}</b>",
         f"<b>Приоритет:</b> {_h(_priority_label(report.priority))}",
     ]
     if report.section:
         lines.append(f"<b>Блок:</b> {_h(report.section)}")
-    lines.extend(["", f"<b>Коротко:</b> {_h(report.summary)}"])
+    lines.extend(["", f"<b>Коротко:</b> {_h(_clip_inline(report.summary, 700))}"])
     if report.diagnosis:
         lines.extend(["", "<b>Диагноз</b>", _h(_clip(report.diagnosis, 1200))])
     if report.weak_concepts:
@@ -246,7 +247,7 @@ def format_mistake_review_preview(report: MistakeReviewResult) -> str:
             missed = str(item.get("missed_point") or "").strip()
             correct = str(item.get("correct_idea") or "").strip()
             practice = str(item.get("practice_prompt") or "").strip()
-            lines.append(f"<b>{_h(number)}.</b> {_h(missed)}")
+            lines.append(f"<b>{_h(number)}.</b> {_h(_clip_inline(missed, 400))}")
             if correct:
                 lines.append(f"Верная идея: {_h(_clip(correct, 350))}")
             if practice:
@@ -334,7 +335,7 @@ def format_mistake_work_item(item: MistakeWorkItem) -> str:
             missed = str(raw.get("missed_point") or "").strip()
             correct = str(raw.get("correct_idea") or "").strip()
             practice = str(raw.get("practice_prompt") or "").strip()
-            lines.append(f"<b>{_h(number)}.</b> {_h(missed)}")
+            lines.append(f"<b>{_h(number)}.</b> {_h(_clip_inline(missed, 400))}")
             if correct:
                 lines.append(f"Верная идея: {_h(_clip(correct, 350))}")
             if practice:
@@ -418,11 +419,11 @@ def format_quiz_question(session: QuizSession, question: QuizQuestion) -> str:
     lines = [
         f"<b>Вопрос {question.question_no}/{session.question_count}</b>",
         "",
-        _h(question.text),
+        _rich(question.text),
         "",
     ]
     lines.extend(
-        f"<b>{ANSWER_LABELS[index]}.</b> {_h(option)}"
+        f"<b>{ANSWER_LABELS[index]}.</b> {_rich(option)}"
         for index, option in enumerate(question.options)
     )
     return "\n".join(lines)
@@ -475,10 +476,10 @@ def format_quiz_report(
                 [
                     "",
                     f"<b>Вопрос {question.question_no}</b>",
-                    _h(question.text),
-                    f"<b>Твой ответ:</b> {selected}. {_h(selected_text)}",
-                    f"<b>Правильно:</b> {correct_label}. {_h(correct_text)}",
-                    f"<i>{_h(question.explanation)}</i>",
+                    _rich(question.text),
+                    f"<b>Твой ответ:</b> {selected}. {_rich(selected_text)}",
+                    f"<b>Правильно:</b> {correct_label}. {_rich(correct_text)}",
+                    f"<i>{_rich_inline(question.explanation)}</i>",
                 ]
             )
             if question.source_refs:
@@ -535,10 +536,10 @@ def format_instant_quiz_report(
                 [
                     "",
                     f"<b>Вопрос {question.question_no}</b>",
-                    _h(question.text),
-                    f"<b>Твой ответ:</b> {selected}. {_h(selected_text)}",
-                    f"<b>Правильно:</b> {correct_label}. {_h(correct_text)}",
-                    f"<i>{_h(question.explanation)}</i>",
+                    _rich(question.text),
+                    f"<b>Твой ответ:</b> {selected}. {_rich(selected_text)}",
+                    f"<b>Правильно:</b> {correct_label}. {_rich(correct_text)}",
+                    f"<i>{_rich_inline(question.explanation)}</i>",
                 ]
             )
             if question.source_refs:
@@ -635,11 +636,64 @@ def _h(value: object) -> str:
     return html.escape(str(value), quote=False)
 
 
+_CODE_FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+
+
+def _rich(value: object) -> str:
+    """Render LLM text with Markdown code into Telegram HTML.
+
+    Messages are sent with parse_mode=HTML, so backticks are not special: without
+    this a model-written ```go ... ``` fence shows up verbatim. Fenced blocks
+    become <pre>, inline `code` becomes <code>, everything else is HTML-escaped.
+    """
+    text = str(value)
+    if not text:
+        return ""
+    parts: list[str] = []
+    idx = 0
+    for match in _CODE_FENCE_RE.finditer(text):
+        parts.append(_rich_inline(text[idx:match.start()]))
+        lang = match.group(1).strip().lower()
+        code = _h(match.group(2).rstrip("\n"))
+        if lang:
+            parts.append(f'<pre><code class="language-{_h(lang)}">{code}</code></pre>')
+        else:
+            parts.append(f"<pre>{code}</pre>")
+        idx = match.end()
+    parts.append(_rich_inline(text[idx:]))
+    return "".join(parts)
+
+
+def _rich_inline(segment: str) -> str:
+    """Escape text and turn inline `code` spans into <code> (no block tags).
+
+    Safe to nest inside other inline tags like <i>, unlike the block <pre> that
+    full _rich() can emit.
+    """
+    parts: list[str] = []
+    idx = 0
+    for match in _INLINE_CODE_RE.finditer(segment):
+        parts.append(_h(segment[idx:match.start()]))
+        parts.append(f"<code>{_h(match.group(1))}</code>")
+        idx = match.end()
+    parts.append(_h(segment[idx:]))
+    return "".join(parts)
+
+
 def _clip(value: str, limit: int) -> str:
     text = str(value).strip()
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "\n..."
+
+
+def _clip_inline(value: str, limit: int) -> str:
+    """Like _clip but keeps the result on one line (no injected newline)."""
+    text = str(value).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
 
 
 def _status_label(status: str) -> str:
