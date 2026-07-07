@@ -14,8 +14,11 @@ mistake review backlog and a first VPS deployment kit.
 - Stage advancement by quiz score.
 - Due review notifications with a "Start test" button.
 - One-message quiz flow: question -> A/B/C/D answer -> next question -> report.
-- Instant quiz flow: choose a block, the whole block or a topic, then take a
-  quiz immediately without creating a review task.
+- Instant quiz flow: choose a block, then a topic, then take a quiz immediately
+  without creating a review task. Whole-block quizzes (all topics in a section
+  at once) are temporarily disabled — combining a section's materials can
+  total hundreds of thousands of chars, which needs proportional/structural
+  sampling before it is worth re-enabling; picking it shows a Telegram alert.
 - Daily random quiz mode: toggle in Telegram, then get one random ready-topic
   test offer every morning.
 - Fake quiz generator for local flow testing.

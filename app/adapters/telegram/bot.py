@@ -2183,28 +2183,16 @@ async def instant_block_all_callback(update: Update, context: ContextTypes.DEFAU
         await query.answer("Это личный бот LearnKeeper.", show_alert=True)
         return
 
-    await query.answer()
-    raw_index = (query.data or "").removeprefix(INSTANT_BLOCK_ALL_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Пройти тест сейчас» еще раз.")
-        return
-
-    services = _services(context)
-    grouped = _ready_review_topics_by_section(services)
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
-        await query.edit_message_text("Список блоков устарел. Нажми «Пройти тест сейчас» еще раз.")
-        return
-
-    section, _topics = sections[index]
-    await _show_quiz_size_choice(
-        query,
-        title=f"Блок: {section}",
-        scope="Пройти тест сейчас",
-        mode=QUIZ_SIZE_INSTANT_BLOCK,
-        target=str(index),
+    # Whole-block instant quizzes are temporarily disabled: combining every
+    # topic's material in one section can total hundreds of thousands of chars
+    # (e.g. all of "Code Review Go" is ~330k), which either blows past
+    # MATERIAL_CHAR_LIMIT (heavy truncation) or costs an outsized share of the
+    # 5h token budget for one test. Re-enable once section-wide material gets a
+    # proportional/structural sampling strategy instead of naive truncation.
+    await query.answer(
+        "Тест по всему блоку сразу сейчас отключен — материалов в блоке "
+        "слишком много для одного теста. Выбери конкретную тему ниже.",
+        show_alert=True,
     )
 
 
