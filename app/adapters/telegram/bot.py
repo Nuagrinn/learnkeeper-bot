@@ -2329,10 +2329,10 @@ async def quiz_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     questions = services.quiz.questions(result.session.id)
     answers = services.quiz.answers(result.session.id)
     if result.session.session_type == "instant":
-        await query.edit_message_text(
-            text=format_instant_quiz_report(result.session, questions, answers),
+        await _finish_quiz_and_send_report(
+            query,
+            report_text=format_instant_quiz_report(result.session, questions, answers),
             reply_markup=_quiz_report_keyboard(result.session.id, questions, answers),
-            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -2341,11 +2341,97 @@ async def quiz_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     task = result.finished_task or services.review_tasks.get_task(result.session.task_id)
-    await query.edit_message_text(
-        text=format_quiz_report(result.session, questions, answers, task),
+    await _finish_quiz_and_send_report(
+        query,
+        report_text=format_quiz_report(result.session, questions, answers, task),
         reply_markup=_quiz_report_keyboard(result.session.id, questions, answers),
-        parse_mode=ParseMode.HTML,
     )
+
+
+async def _finish_quiz_and_send_report(query, *, report_text: str, reply_markup=None) -> None:
+    """Keep the finished quiz as its own message and send the report separately.
+
+    The quiz message (last question) loses its answer buttons; the report is sent
+    as a new message (split into several if long) so test-taking and the report do
+    not overwrite each other. The report keyboard goes on the last report chunk.
+    """
+    with contextlib.suppress(BadRequest):
+        await query.edit_message_reply_markup(reply_markup=None)
+    message = query.message
+    if message is None:
+        await _safe_query_edit(
+            query,
+            report_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+        return
+    chunks = split_message(report_text)
+    last = len(chunks) - 1
+    for index, chunk in enumerate(chunks):
+        with contextlib.suppress(Exception):
+            await message.reply_text(
+                chunk,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup if index == last else None,
+            )
+
+
+async def _send_long_preview(query, chunks: list[str], *, reply_markup=None) -> None:
+    """Show a possibly long HTML preview without hitting Telegram's 4096 limit.
+
+    The first chunk edits the callback message in place; any remaining chunks are
+    sent as follow-up messages. The inline keyboard is attached to the last chunk
+    only. Without this a long report fails the edit with Message_too_long and the
+    user is left staring at the stale "waiting" message.
+    """
+    if not chunks:
+        return
+    last = len(chunks) - 1
+    await _safe_query_edit(
+        query,
+        chunks[0],
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup if last == 0 else None,
+    )
+    message = query.message
+    if message is None:
+        return
+    for index in range(1, len(chunks)):
+        with contextlib.suppress(Exception):
+            await message.reply_text(
+                chunks[index],
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup if index == last else None,
+            )
+
+
+def _mistake_review_wait_text(*, frame: str, elapsed_seconds: int = 0) -> str:
+    return (
+        f"{frame} <b>Разбираю ошибки</b>\n\n"
+        "Отправил отчет агенту. Жду ответ...\n"
+        f"Ожидание: {_format_wait_elapsed(elapsed_seconds)}\n\n"
+        "Это может занять немного времени."
+    )
+
+
+async def _animate_mistake_review_message(query) -> None:
+    index = 0
+    started_at = perf_counter()
+    while True:
+        await asyncio.sleep(3)
+        index += 1
+        elapsed = int(perf_counter() - started_at)
+        if index == 1 or index % 4 == 0:
+            log.info("Mistake review still waiting elapsed=%ss", elapsed)
+        with contextlib.suppress(Exception):
+            await query.edit_message_text(
+                _mistake_review_wait_text(
+                    frame=GENERATION_FRAMES[index % len(GENERATION_FRAMES)],
+                    elapsed_seconds=elapsed,
+                ),
+                parse_mode=ParseMode.HTML,
+            )
 
 
 async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2374,8 +2460,7 @@ async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_
     await _safe_query_answer(query, "Запустил разбор")
     await _safe_query_edit(
         query,
-        "<b>Разбираю ошибки</b>\n\n"
-        "Отправил отчет агенту. Это может занять немного времени.",
+        _mistake_review_wait_text(frame=GENERATION_FRAMES[0]),
         parse_mode=ParseMode.HTML,
     )
     request = _mistake_review_input(services, session, questions, answers)
@@ -2385,9 +2470,11 @@ async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_
         len(request.mistakes),
         session.topic_id,
     )
+    animation_task = asyncio.create_task(_animate_mistake_review_message(query))
     try:
         report = await asyncio.to_thread(services.mistake_review_agent.analyze, request)
     except MistakeReviewAgentError as exc:
+        await _stop_animation_task(animation_task)
         log.warning("Mistake review failed session_id=%s error=%s", session.id, exc)
         await _safe_query_edit(
             query,
@@ -2397,6 +2484,7 @@ async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_
         )
         return
     except Exception as exc:
+        await _stop_animation_task(animation_task)
         log.exception("Mistake review failed unexpectedly session_id=%s", session.id)
         await _safe_query_edit(
             query,
@@ -2405,13 +2493,14 @@ async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_
             parse_mode=ParseMode.HTML,
         )
         return
+    finally:
+        await _stop_animation_task(animation_task)
 
     pending = context.user_data.setdefault("pending_mistake_reports", {})
     pending[session.id] = {"report": report, "questions": request.mistakes}
-    await _safe_query_edit(
+    await _send_long_preview(
         query,
-        format_mistake_review_preview(report),
-        parse_mode=ParseMode.HTML,
+        split_message(format_mistake_review_preview(report)),
         reply_markup=_mistake_report_keyboard(session.id),
     )
 
