@@ -9,6 +9,7 @@ User=learnkeeper
 Group=learnkeeper
 WorkingDirectory=/opt/learnkeeper/learnkeeper-bot
 Environment=HOME=/home/learnkeeper
+Environment=TZ=Europe/Moscow
 EnvironmentFile=/opt/learnkeeper/learnkeeper-bot/.env
 ExecStart=/opt/learnkeeper/learnkeeper-bot/.venv/bin/python -m app.telegram_bot
 Restart=always
