@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from app.config import PROJECT_ROOT, Settings
+from app.config import Settings
+from app.core.claude_cli import sandbox_cwd
 from app.features.llm_usage.service import LlmUsageRecorder
 from app.features.quiz.generator import ClaudeCliQuizGenerator, FakeQuizGenerator, QuizGenerator
 
@@ -19,7 +20,7 @@ def build_quiz_generator(
             model=settings.claude_model,
             timeout_seconds=settings.claude_timeout_seconds,
             allow_paid_api=settings.allow_paid_api,
-            cwd=PROJECT_ROOT,
+            cwd=sandbox_cwd(),
             usage_recorder=usage_recorder,
         )
     raise RuntimeError(f"Unsupported LLM_PROVIDER: {settings.llm_provider}")

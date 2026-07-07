@@ -4,7 +4,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from app.config import PROJECT_ROOT
+from app.core.claude_cli import sandbox_cwd
 from app.features.topic_inbox.agent import (
     ClaudeCliTopicInboxAgent,
     FakeTopicInboxAgent,
@@ -48,9 +48,10 @@ class TopicInboxAgentTest(unittest.TestCase):
 
         self.assertEqual("Transactional Outbox", result.title)
         self.assertEqual("System Design", result.section)
-        self.assertEqual(str(PROJECT_ROOT), calls[0][1]["cwd"])
+        self.assertEqual(sandbox_cwd(), calls[0][1]["cwd"])
         self.assertIn("--output-format", calls[0][0])
         self.assertNotIn("--permission-mode", calls[0][0])
+        self.assertIn("--disallowedTools", calls[0][0])
 
     def test_claude_agent_keeps_broad_idea_and_strips_meta_prefix(self) -> None:
         def run_command(cmd, **kwargs):

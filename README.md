@@ -232,7 +232,7 @@ For real quiz generation through Claude Code subscription auth, add:
 LLM_PROVIDER=claude_cli
 CLAUDE_BIN=claude
 CLAUDE_CODE_OAUTH_TOKEN=token_from_claude_setup_token
-CLAUDE_MODEL=
+CLAUDE_MODEL=claude-sonnet-5
 CLAUDE_TIMEOUT_SECONDS=600
 ALLOW_PAID_API=false
 LLM_INPUT_USD_PER_1M_TOKENS=2
@@ -241,7 +241,26 @@ LLM_USAGE_BUDGET_5H_USD=6.5
 LLM_USAGE_BUDGET_DAILY_USD=13
 LLM_USAGE_BUDGET_WEEKLY_USD=65
 LLM_USAGE_BUDGET_MONTHLY_USD=250
+LLM_USAGE_BUDGET_5H_TOKENS=1000000
+LLM_USAGE_BUDGET_DAILY_TOKENS=2500000
+LLM_USAGE_BUDGET_WEEKLY_TOKENS=12000000
+LLM_USAGE_BUDGET_MONTHLY_TOKENS=45000000
 ```
+
+Pin `CLAUDE_MODEL` (e.g. `claude-sonnet-5`) so token usage is predictable; an
+empty value uses Claude Code's default model. The `topic_inbox` normalizer is a
+trivial task, so `TOPIC_INBOX_AGENT_MODEL=claude-haiku-4-5` is enough.
+
+To keep token usage down, quiz/mistake/inbox agents run with an explicit
+`--disallowedTools` denylist and in an empty working directory, so Claude Code
+does a single structured-output call instead of browsing repo files. Quiz
+material is capped at 35k chars and mistake-report excerpts at 10k chars.
+
+The `LLM_USAGE_BUDGET_*` values (both USD and token variants) are **local
+benchmarks** shown in the Telegram usage report, not real Anthropic limits. The
+5h budget also drives a background alert: the bot DMs the owner when rolling 5h
+usage crosses 80% and 100%. If a Claude call fails on a usage/rate limit, the bot
+now shows a clear "limit reached" notice.
 
 Do not put `ANTHROPIC_API_KEY` in `.env` unless you deliberately want API
 billing. With `ALLOW_PAID_API=false`, the bot strips Anthropic API env vars

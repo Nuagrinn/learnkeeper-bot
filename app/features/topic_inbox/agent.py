@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.config import PROJECT_ROOT
+from app.core.claude_cli import DISALLOWED_AGENT_TOOLS, sandbox_cwd
 from app.features.llm_usage.service import LlmUsageRecorder, NoopLlmUsageRecorder
 from app.features.quiz.generator import PAID_API_ENV_VARS, _claude_cli_reported_usage
 
@@ -112,6 +112,8 @@ class ClaudeCliTopicInboxAgent:
             "--json-schema",
             json.dumps(AGENT_JSON_SCHEMA, ensure_ascii=False),
             "--no-session-persistence",
+            "--disallowedTools",
+            DISALLOWED_AGENT_TOOLS,
         ]
         if self.model:
             cmd.extend(["--model", self.model])
@@ -134,7 +136,7 @@ class ClaudeCliTopicInboxAgent:
                 text=True,
                 capture_output=True,
                 timeout=self.timeout_seconds,
-                cwd=str(PROJECT_ROOT),
+                cwd=sandbox_cwd(),
                 env=self._safe_env(),
             )
         except FileNotFoundError as exc:

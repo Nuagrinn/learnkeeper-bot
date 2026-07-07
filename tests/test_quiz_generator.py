@@ -88,7 +88,7 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
         self.assertIn("--json-schema", call["cmd"])
         self.assertIn("--no-session-persistence", call["cmd"])
         self.assertNotIn("--permission-mode", call["cmd"])
-        self.assertNotIn("--disallowedTools", call["cmd"])
+        self.assertIn("--disallowedTools", call["cmd"])
         self.assertIn("Сгенерируй тест", call["input"])
         self.assertIn("len, cap, append", call["input"])
         env = call["env"]

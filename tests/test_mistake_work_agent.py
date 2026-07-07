@@ -4,7 +4,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from app.config import PROJECT_ROOT
+from app.core.claude_cli import sandbox_cwd
 from app.features.mistake_work.agent import (
     ClaudeCliMistakeReviewAgent,
     FakeMistakeReviewAgent,
@@ -114,10 +114,10 @@ class MistakeReviewAgentTest(unittest.TestCase):
 
         self.assertEqual("high", result.priority)
         self.assertEqual("Разбор индексов PostgreSQL", result.title)
-        self.assertEqual(str(PROJECT_ROOT), calls[0][1]["cwd"])
+        self.assertEqual(sandbox_cwd(), calls[0][1]["cwd"])
         self.assertIn("--json-schema", calls[0][0])
         self.assertNotIn("--permission-mode", calls[0][0])
-        self.assertNotIn("--disallowedTools", calls[0][0])
+        self.assertIn("--disallowedTools", calls[0][0])
         usage_call = usage_recorder.calls[0]
         self.assertEqual("claude_cli_reported", usage_call["usage_source"])
         self.assertEqual(60, usage_call["input_tokens"])

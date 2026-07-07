@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from typing import Protocol
 
+from app.core.claude_cli import DISALLOWED_AGENT_TOOLS
 from app.core.repo import RepoTopic, TopicMaterial, TopicMaterials
 from app.features.llm_usage.service import LlmUsageRecorder, NoopLlmUsageRecorder
 from app.features.quiz.models import GeneratedQuestion
@@ -19,7 +20,7 @@ from app.features.quiz.models import GeneratedQuestion
 
 log = logging.getLogger(__name__)
 PROMPT_VERSION = "learnkeeper-quiz-v2"
-MATERIAL_CHAR_LIMIT = 80_000
+MATERIAL_CHAR_LIMIT = 35_000
 # Standalone practice/source code files are dropped from quiz material: the user
 # does not memorize whole code files. Code-reasoning questions ("what does this
 # output") are still wanted — the model embeds a short self-contained snippet in
@@ -191,6 +192,8 @@ class ClaudeCliQuizGenerator:
             "--json-schema",
             json.dumps(QUIZ_JSON_SCHEMA, ensure_ascii=False),
             "--no-session-persistence",
+            "--disallowedTools",
+            DISALLOWED_AGENT_TOOLS,
         ]
         if self.model:
             cmd.extend(["--model", self.model])
