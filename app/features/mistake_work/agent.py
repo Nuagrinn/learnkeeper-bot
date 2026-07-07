@@ -17,7 +17,7 @@ from app.features.quiz.generator import PAID_API_ENV_VARS, _claude_cli_reported_
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "learnkeeper-mistake-review-v1"
+PROMPT_VERSION = "learnkeeper-mistake-review-v2"
 PRIORITIES = {"low", "normal", "high"}
 MISTAKE_REVIEW_JSON_SCHEMA = {
     "type": "object",
@@ -410,8 +410,9 @@ def _system_prompt() -> str:
     return (
         "Ты аналитик ошибок LearnKeeper.\n"
         "Пользователь прошел quiz по материалам interview-review и ошибся в части вопросов.\n"
-        "Твоя задача: вернуть полноценный, но компактный отчет для дальнейшей ручной проработки.\n\n"
+        "Твоя задача: вернуть краткий, но полезный отчет для дальнейшей ручной проработки.\n\n"
         "Жесткие правила:\n"
+        "- пиши максимально сжато и по делу: без воды, вступлений и повторов;\n"
         "- НЕ изменяй файлы;\n"
         "- НЕ предлагай git/diff/commit;\n"
         "- НЕ веди диалог и НЕ задавай уточняющих вопросов;\n"
@@ -428,17 +429,25 @@ def _system_prompt() -> str:
 def _user_prompt(request: MistakeReviewInput) -> str:
     payload = json.dumps(asdict(request), ensure_ascii=False)
     return (
-        "Разбери ошибки quiz-сессии LearnKeeper и верни JSON-отчет.\n\n"
+        "Разбери ошибки quiz-сессии LearnKeeper и верни JSON-отчет. Пиши кратко.\n\n"
         f"QUIZ_MISTAKES_JSON:\n{payload}\n\n"
-        "Нужно вернуть:\n"
+        "Лимиты длины (держись в пределах, не превышай):\n"
+        "- title: до 80 символов;\n"
+        "- summary: 1-2 предложения, до 250 символов;\n"
+        "- diagnosis: один абзац, 2-4 предложения, до 500 символов;\n"
+        "- weak_concepts: 3-6 коротких пунктов;\n"
+        "- interview_review_suggestion.details: 1-2 предложения, до 250 символов;\n"
+        "- questions_to_revisit: только реально важные вопросы; в каждом missed_point, "
+        "correct_idea и practice_prompt — по одному короткому предложению.\n\n"
+        "Смысл полей:\n"
         "- title: название отчета;\n"
         "- section: блок/раздел, куда логично отнести проработку;\n"
         "- priority: low|normal|high;\n"
         "- summary: короткая выжимка;\n"
-        "- diagnosis: развернутый диагноз на 1-3 абзаца;\n"
-        "- weak_concepts: список конкретных слабых понятий;\n"
+        "- diagnosis: суть пробела;\n"
+        "- weak_concepts: конкретные слабые понятия;\n"
         "- interview_review_suggestion: что потом руками добавить/усилить в interview-review;\n"
-        "- questions_to_revisit: по каждому важному вопросу, что было упущено и как потренировать.\n"
+        "- questions_to_revisit: что было упущено и как коротко потренировать.\n"
     )
 
 
