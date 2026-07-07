@@ -42,6 +42,7 @@ from app.adapters.telegram.formatters import (
     format_task,
     format_topic_not_ready,
     format_instant_quiz_report,
+    format_llm_budget_alert,
     format_llm_usage_report,
     format_quiz_question,
     format_quiz_report,
@@ -186,6 +187,7 @@ MENU_BUTTONS = {
 
 
 LAST_NOTIFIED_VERSION_KEY = "app_version_last_notified"
+LLM_BUDGET_ALERT_KEY = "llm_budget_alert_level"
 CHANGELOG_LIMIT = 8
 
 
@@ -206,6 +208,10 @@ class AppServices:
                 daily_usd=settings.llm_usage_budget_daily_usd,
                 weekly_usd=settings.llm_usage_budget_weekly_usd,
                 monthly_usd=settings.llm_usage_budget_monthly_usd,
+                rolling_5h_tokens=settings.llm_usage_budget_5h_tokens,
+                daily_tokens=settings.llm_usage_budget_daily_tokens,
+                weekly_tokens=settings.llm_usage_budget_weekly_tokens,
+                monthly_tokens=settings.llm_usage_budget_monthly_tokens,
             ),
         )
         self.review_tasks = ReviewTaskService(self.db, self.repo)
@@ -304,6 +310,44 @@ def _set_app_setting(services: AppServices, key: str, value: str) -> None:
             """,
             (key, value, now),
         )
+
+
+_LIMIT_ERROR_MARKERS = (
+    "usage limit",
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "limit reached",
+    "limit will reset",
+    "5-hour limit",
+    "5 hour limit",
+    "weekly limit",
+    "too many requests",
+    "429",
+    "overloaded",
+    "try again later",
+    "quota",
+)
+LIMIT_NOTICE = (
+    "⚠️ <b>Похоже, достигнут лимит Claude</b>\n\n"
+    "Claude вернул ошибку про лимит/квоту использования. Это лимит подписки Anthropic — "
+    "он общий на все сессии Claude Code, а не только на бота.\n\n"
+    "Попробуй позже: лимит обычно сбрасывается в течение нескольких часов."
+)
+
+
+def _is_limit_error(text: str) -> bool:
+    low = (text or "").lower()
+    return any(marker in low for marker in _LIMIT_ERROR_MARKERS)
+
+
+def _generation_error_text(exc: Exception, fallback: str) -> str:
+    """Return a clear limit notice when the CLI failed on a usage/rate limit,
+    otherwise the generic fallback message."""
+    if _is_limit_error(str(exc)):
+        log.warning("LLM usage/rate limit likely hit: %s", exc)
+        return LIMIT_NOTICE
+    return fallback
 
 
 def _git_output(*args: str) -> str:
@@ -1441,10 +1485,10 @@ def _material_context(services: AppServices, session: QuizSession) -> list[dict[
             content = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        excerpt = content[:5000]
+        excerpt = content[:3000]
         total_chars += len(excerpt)
         context.append({"source_path": rel, "excerpt": excerpt})
-        if total_chars >= 25000:
+        if total_chars >= 10000:
             break
     return context
 
@@ -1603,9 +1647,13 @@ async def _start_instant_quiz(
     except QuizGenerationError as exc:
         log.exception("Instant quiz generation failed topic_title=%s", topic_title)
         await query.edit_message_text(
-            "Не удалось сгенерировать моментальный тест.\n\n"
-            f"Причина: {exc}\n\n"
-            "Попробуй позже или проверь генерацию через `quiz-preview`."
+            _generation_error_text(
+                exc,
+                "Не удалось сгенерировать моментальный тест.\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}\n\n"
+                "Попробуй позже.",
+            ),
+            parse_mode=ParseMode.HTML,
         )
         return
     except Exception as exc:
@@ -1680,9 +1728,13 @@ async def _start_review_quiz(
             await animation_task
         log.exception("Quiz generation failed for task_id=%s", task_id)
         await query.edit_message_text(
-            "Не удалось сгенерировать тест.\n\n"
-            f"Причина: {exc}\n\n"
-            "Попробуй позже или проверь генерацию через `quiz-preview`."
+            _generation_error_text(
+                exc,
+                "Не удалось сгенерировать тест.\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}\n\n"
+                "Попробуй позже.",
+            ),
+            parse_mode=ParseMode.HTML,
         )
         return
     except ValueError:
@@ -2478,8 +2530,11 @@ async def mistake_review_callback(update: Update, context: ContextTypes.DEFAULT_
         log.warning("Mistake review failed session_id=%s error=%s", session.id, exc)
         await _safe_query_edit(
             query,
-            "<b>Не удалось разобрать ошибки</b>\n\n"
-            f"Причина: {html.escape(str(exc), quote=False)}",
+            _generation_error_text(
+                exc,
+                "<b>Не удалось разобрать ошибки</b>\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}",
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
@@ -3112,6 +3167,40 @@ async def notify_version_update(context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("Version update notification sent version=%s previous=%s", version, last_notified or "-")
 
 
+async def notify_llm_budget(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Warn the owner when the rolling 5h LLM usage crosses the local benchmark.
+
+    Fires once when it crosses 80% and once at 100%; resets when the rolling
+    window drops back below 80%, so it does not spam.
+    """
+    services = _services(context)
+    owner_id = _owner_id(context)
+    five_h = services.llm_usage.stats_for_periods()[0]
+    if five_h.budget_usd <= 0 and five_h.budget_tokens <= 0:
+        return
+
+    percent = max(five_h.budget_percent, five_h.token_budget_percent)
+    level = 100 if percent >= 100 else (80 if percent >= 80 else 0)
+    last_level = int(_get_app_setting(services, LLM_BUDGET_ALERT_KEY, "0") or "0")
+
+    if level <= last_level:
+        if level < last_level:
+            _set_app_setting(services, LLM_BUDGET_ALERT_KEY, str(level))
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=owner_id,
+            text=format_llm_budget_alert(five_h, level),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        log.exception("Failed to send LLM budget alert level=%s", level)
+        return
+    _set_app_setting(services, LLM_BUDGET_ALERT_KEY, str(level))
+    log.warning("LLM budget alert sent level=%s percent=%.1f", level, percent)
+
+
 def _daily_quiz_timezone(settings: Settings) -> ZoneInfo:
     try:
         return ZoneInfo(settings.daily_quiz_timezone)
@@ -3199,6 +3288,12 @@ def build_application(settings: Settings, services: AppServices) -> Application:
             notify_version_update,
             when=5,
             name="version-update-notification",
+        )
+        app.job_queue.run_repeating(
+            notify_llm_budget,
+            interval=300,
+            first=120,
+            name="llm-budget-alert",
         )
         app.job_queue.run_daily(
             send_daily_quiz_offer,

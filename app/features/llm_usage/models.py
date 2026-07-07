@@ -53,6 +53,8 @@ class LlmUsageStats:
     duration_ms: int
     budget_usd: float = 0
     budget_percent: float = 0
+    budget_tokens: int = 0
+    token_budget_percent: float = 0
     features: list[LlmFeatureUsage] = field(default_factory=list)
 
 

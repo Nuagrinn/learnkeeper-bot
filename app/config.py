@@ -53,6 +53,10 @@ class Settings:
     llm_usage_budget_daily_usd: float
     llm_usage_budget_weekly_usd: float
     llm_usage_budget_monthly_usd: float
+    llm_usage_budget_5h_tokens: int
+    llm_usage_budget_daily_tokens: int
+    llm_usage_budget_weekly_tokens: int
+    llm_usage_budget_monthly_tokens: int
     stt_provider: str
     voice_dir: Path
     openai_api_key: str
@@ -165,6 +169,22 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
     llm_usage_budget_monthly_usd = _env_float(
         os.getenv("LLM_USAGE_BUDGET_MONTHLY_USD")
         or env_file.get("LLM_USAGE_BUDGET_MONTHLY_USD", "0")
+    )
+    llm_usage_budget_5h_tokens = _env_int(
+        os.getenv("LLM_USAGE_BUDGET_5H_TOKENS")
+        or env_file.get("LLM_USAGE_BUDGET_5H_TOKENS", "1000000")
+    )
+    llm_usage_budget_daily_tokens = _env_int(
+        os.getenv("LLM_USAGE_BUDGET_DAILY_TOKENS")
+        or env_file.get("LLM_USAGE_BUDGET_DAILY_TOKENS", "2500000")
+    )
+    llm_usage_budget_weekly_tokens = _env_int(
+        os.getenv("LLM_USAGE_BUDGET_WEEKLY_TOKENS")
+        or env_file.get("LLM_USAGE_BUDGET_WEEKLY_TOKENS", "12000000")
+    )
+    llm_usage_budget_monthly_tokens = _env_int(
+        os.getenv("LLM_USAGE_BUDGET_MONTHLY_TOKENS")
+        or env_file.get("LLM_USAGE_BUDGET_MONTHLY_TOKENS", "45000000")
     )
     stt_provider = (
         os.getenv("STT_PROVIDER") or env_file.get("STT_PROVIDER", "disabled")
@@ -301,6 +321,10 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         llm_usage_budget_daily_usd=llm_usage_budget_daily_usd,
         llm_usage_budget_weekly_usd=llm_usage_budget_weekly_usd,
         llm_usage_budget_monthly_usd=llm_usage_budget_monthly_usd,
+        llm_usage_budget_5h_tokens=llm_usage_budget_5h_tokens,
+        llm_usage_budget_daily_tokens=llm_usage_budget_daily_tokens,
+        llm_usage_budget_weekly_tokens=llm_usage_budget_weekly_tokens,
+        llm_usage_budget_monthly_tokens=llm_usage_budget_monthly_tokens,
         stt_provider=stt_provider,
         voice_dir=voice_dir,
         openai_api_key=openai_api_key,
@@ -334,6 +358,13 @@ def _env_bool(value: str) -> bool:
 def _env_float(value: str) -> float:
     try:
         return max(0, float(value.strip().replace(",", ".")))
+    except (AttributeError, ValueError):
+        return 0
+
+
+def _env_int(value: str) -> int:
+    try:
+        return max(0, int(float(value.strip().replace(",", "").replace("_", ""))))
     except (AttributeError, ValueError):
         return 0
 

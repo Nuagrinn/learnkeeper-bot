@@ -357,8 +357,9 @@ def format_llm_usage_report(
     lines = [
         "<b>LLM usage</b>",
         "",
-        "Локальный учет запросов к Claude/агентам.",
-        "Токены сейчас считаются оценочно по размеру входа и выхода.",
+        "Локальный учёт запросов к Claude. Значения бюджета ниже — <b>локальные ориентиры</b>, "
+        "а не реальные лимиты подписки Anthropic.",
+        "<i>Токены включают дешёвые cache-read (~10% цены), поэтому число немного завышает реальный расход.</i>",
     ]
     if not prices_configured:
         lines.extend(
@@ -385,33 +386,74 @@ def format_llm_usage_report(
                 "",
                 f"<b>{_h(item.label)}</b>",
                 f"Запросы: <b>{item.request_count}</b> · ошибок: <b>{item.failure_count}</b>",
-                (
-                    "Токены: "
-                    f"<code>{_format_int(item.total_tokens)}</code> "
-                    f"(in <code>{_format_int(item.input_tokens)}</code> / "
-                    f"out <code>{_format_int(item.output_tokens)}</code>)"
-                ),
-                f"Время ожидания: <code>{_format_duration_ms(item.duration_ms)}</code>",
             ]
         )
-        if prices_configured:
+        if item.budget_tokens > 0:
             lines.append(
-                f"API-equivalent: <code>${_format_usd(item.estimated_usd)}</code>"
+                f"Токены: <code>{_format_int(item.total_tokens)}</code> / "
+                f"<code>{_format_int(item.budget_tokens)}</code> "
+                f"(<b>{item.token_budget_percent:.1f}%</b>) {_budget_status(item.token_budget_percent)}"
+            )
+            lines.append(
+                f"<i>вход {_format_int(item.input_tokens)} · выход {_format_int(item.output_tokens)}</i>"
+            )
+        else:
+            lines.append(
+                "Токены: "
+                f"<code>{_format_int(item.total_tokens)}</code> "
+                f"(вход <code>{_format_int(item.input_tokens)}</code> / "
+                f"выход <code>{_format_int(item.output_tokens)}</code>)"
             )
         if item.budget_usd > 0:
             lines.append(
-                f"Ориентир: {_budget_status(item.budget_percent)} "
-                f"<code>{item.budget_percent:.2f}%</code> "
-                f"от <code>${_format_usd(item.budget_usd)}</code>"
+                f"Стоимость: <code>${_format_usd(item.estimated_usd)}</code> / "
+                f"<code>${_format_usd(item.budget_usd)}</code> "
+                f"(<b>{item.budget_percent:.1f}%</b>) {_budget_status(item.budget_percent)}"
             )
-        if item.features:
-            lines.append("<b>Топ фич</b>")
+        elif prices_configured or item.estimated_usd > 0:
+            lines.append(
+                f"Стоимость: <code>${_format_usd(item.estimated_usd)}</code> (API-эквивалент)"
+            )
+        lines.append(f"Время: <code>{_format_duration_ms(item.duration_ms)}</code>")
+        if item.features and item.total_tokens > 0:
+            lines.append("<b>Топ фич</b> (доля токенов периода)")
             for feature in item.features[:3]:
+                share = feature.total_tokens / item.total_tokens * 100
                 lines.append(
                     f"- {_h(_feature_label(feature.feature))}: "
-                    f"<code>{_format_int(feature.total_tokens)}</code> токенов "
-                    f"({feature.request_count} req)"
+                    f"<code>{_format_int(feature.total_tokens)}</code> "
+                    f"(<b>{share:.0f}%</b>, {feature.request_count} req)"
                 )
+    return "\n".join(lines)
+
+
+# NOTE: kept next to format_llm_usage_report so both share the token/usd helpers.
+def format_llm_budget_alert(item: LlmUsageStats, level: int) -> str:
+    head = (
+        "🔴 Локальный ориентир 5ч исчерпан"
+        if level >= 100
+        else "🟡 Локальный ориентир 5ч почти исчерпан"
+    )
+    lines = [f"<b>{head}</b>", ""]
+    if item.budget_tokens > 0:
+        lines.append(
+            f"Токены за 5ч: <code>{_format_int(item.total_tokens)}</code> / "
+            f"<code>{_format_int(item.budget_tokens)}</code> "
+            f"(<b>{item.token_budget_percent:.0f}%</b>)"
+        )
+    if item.budget_usd > 0:
+        lines.append(
+            f"Стоимость (API-экв.): <code>${_format_usd(item.estimated_usd)}</code> / "
+            f"<code>${_format_usd(item.budget_usd)}</code> "
+            f"(<b>{item.budget_percent:.0f}%</b>)"
+        )
+    lines.extend(
+        [
+            "",
+            "<i>Это локальный ориентир бота, а не реальный лимит Anthropic. "
+            "Если тестов много подряд — возможно, стоит сделать паузу.</i>",
+        ]
+    )
     return "\n".join(lines)
 
 

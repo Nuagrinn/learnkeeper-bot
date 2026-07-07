@@ -87,6 +87,10 @@ class LlmUsageBudgetConfig:
     daily_usd: float = 0
     weekly_usd: float = 0
     monthly_usd: float = 0
+    rolling_5h_tokens: int = 0
+    daily_tokens: int = 0
+    weekly_tokens: int = 0
+    monthly_tokens: int = 0
 
     @property
     def configured(self) -> bool:
@@ -253,17 +257,25 @@ class LlmUsageService:
                 "5 часов",
                 current - timedelta(hours=5),
                 budget_usd=self.budget_config.rolling_5h_usd,
+                budget_tokens=self.budget_config.rolling_5h_tokens,
             ),
-            self.stats_since("Сегодня", today, budget_usd=self.budget_config.daily_usd),
+            self.stats_since(
+                "Сегодня",
+                today,
+                budget_usd=self.budget_config.daily_usd,
+                budget_tokens=self.budget_config.daily_tokens,
+            ),
             self.stats_since(
                 "7 дней",
                 current - timedelta(days=7),
                 budget_usd=self.budget_config.weekly_usd,
+                budget_tokens=self.budget_config.weekly_tokens,
             ),
             self.stats_since(
                 "30 дней",
                 current - timedelta(days=30),
                 budget_usd=self.budget_config.monthly_usd,
+                budget_tokens=self.budget_config.monthly_tokens,
             ),
         ]
 
@@ -273,6 +285,7 @@ class LlmUsageService:
         since: datetime,
         *,
         budget_usd: float = 0,
+        budget_tokens: int = 0,
     ) -> LlmUsageStats:
         since = since.replace(microsecond=0)
         since_text = since.isoformat(timespec="seconds")
@@ -312,6 +325,8 @@ class LlmUsageService:
             ).fetchall()
         estimated_usd = float(totals["estimated_usd"] or 0)
         safe_budget = max(0, float(budget_usd))
+        total_tokens = int(totals["total_tokens"] or 0)
+        safe_token_budget = max(0, int(budget_tokens))
         return LlmUsageStats(
             label=label,
             since=since,
@@ -320,11 +335,13 @@ class LlmUsageService:
             failure_count=int(totals["failure_count"] or 0),
             input_tokens=int(totals["input_tokens"] or 0),
             output_tokens=int(totals["output_tokens"] or 0),
-            total_tokens=int(totals["total_tokens"] or 0),
+            total_tokens=total_tokens,
             estimated_usd=estimated_usd,
             duration_ms=int(totals["duration_ms"] or 0),
             budget_usd=safe_budget,
             budget_percent=_budget_percent(estimated_usd, safe_budget),
+            budget_tokens=safe_token_budget,
+            token_budget_percent=_budget_percent(total_tokens, safe_token_budget),
             features=[
                 LlmFeatureUsage(
                     feature=row["feature"],

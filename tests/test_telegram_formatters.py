@@ -524,6 +524,8 @@ class TelegramFormattersTest(unittest.TestCase):
                 duration_ms=65000,
                 budget_usd=10,
                 budget_percent=12.34,
+                budget_tokens=10000,
+                token_budget_percent=12.0,
                 features=[
                     LlmFeatureUsage(
                         feature="quiz_generation",
@@ -544,8 +546,14 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertIn("Запросы: <b>2</b>", text)
         self.assertIn("<code>1 200</code>", text)
         self.assertIn("генерация тестов", text)
-        self.assertIn("12.34%", text)
-        self.assertIn("Стоимость не настроена", text)
+        # token budget line: absolute / budget (percent)
+        self.assertIn("12.0%", text)
+        self.assertIn("<code>10 000</code>", text)
+        # cost line: absolute / budget (percent)
+        self.assertIn("12.3%", text)
+        self.assertIn("$10.00", text)
+        # per-feature share of period tokens
+        self.assertIn("100%", text)
 
 
 if __name__ == "__main__":
