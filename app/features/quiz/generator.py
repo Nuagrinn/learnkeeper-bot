@@ -20,7 +20,10 @@ from app.features.quiz.models import GeneratedQuestion
 
 log = logging.getLogger(__name__)
 PROMPT_VERSION = "learnkeeper-quiz-v2"
-MATERIAL_CHAR_LIMIT = 35_000
+# Covers every current single-topic material in full (largest measured is ~66.6k
+# chars for db02/postgresql-mvcc after code-file exclusion) with headroom for
+# growth. Re-check this if interview-review grows a topic past ~65k chars.
+MATERIAL_CHAR_LIMIT = 70_000
 # Standalone practice/source code files are dropped from quiz material: the user
 # does not memorize whole code files. Code-reasoning questions ("what does this
 # output") are still wanted — the model embeds a short self-contained snippet in
