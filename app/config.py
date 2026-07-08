@@ -82,6 +82,9 @@ class Settings:
     mistake_review_agent_provider: str
     mistake_review_agent_model: str
     mistake_review_agent_timeout_seconds: int
+    explain_check_agent_provider: str
+    explain_check_agent_model: str
+    explain_check_agent_timeout_seconds: int
 
 
 def load_settings(db_path: str | None = None, repo_path: str | None = None) -> Settings:
@@ -305,6 +308,23 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         mistake_review_agent_timeout_seconds = max(30, int(raw_mistake_review_agent_timeout))
     except ValueError:
         mistake_review_agent_timeout_seconds = 180
+    explain_check_default_provider = "claude_cli" if claude_code_oauth_token else "fake"
+    explain_check_agent_provider = (
+        os.getenv("EXPLAIN_CHECK_AGENT_PROVIDER")
+        or env_file.get("EXPLAIN_CHECK_AGENT_PROVIDER", explain_check_default_provider)
+    ).strip().lower()
+    explain_check_agent_model = (
+        os.getenv("EXPLAIN_CHECK_AGENT_MODEL")
+        or env_file.get("EXPLAIN_CHECK_AGENT_MODEL", claude_model)
+    ).strip()
+    raw_explain_check_agent_timeout = (
+        os.getenv("EXPLAIN_CHECK_AGENT_TIMEOUT_SECONDS")
+        or env_file.get("EXPLAIN_CHECK_AGENT_TIMEOUT_SECONDS", "180")
+    )
+    try:
+        explain_check_agent_timeout_seconds = max(30, int(raw_explain_check_agent_timeout))
+    except ValueError:
+        explain_check_agent_timeout_seconds = 180
 
     return Settings(
         db_path=resolved_db,
@@ -357,6 +377,9 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         mistake_review_agent_provider=mistake_review_agent_provider,
         mistake_review_agent_model=mistake_review_agent_model,
         mistake_review_agent_timeout_seconds=mistake_review_agent_timeout_seconds,
+        explain_check_agent_provider=explain_check_agent_provider,
+        explain_check_agent_model=explain_check_agent_model,
+        explain_check_agent_timeout_seconds=explain_check_agent_timeout_seconds,
     )
 
 
