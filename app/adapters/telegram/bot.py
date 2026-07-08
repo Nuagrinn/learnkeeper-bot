@@ -80,6 +80,8 @@ from app.features.topic_inbox.service import TopicInboxService
 
 log = logging.getLogger(__name__)
 START_REVIEW_PREFIX = "start_review:"
+EXPLAIN_THEN_REVIEW_PREFIX = "explain_then_review:"
+SKIP_EXPLAIN_REVIEW_PREFIX = "skip_explain_review:"
 QUIZ_ANSWER_PREFIX = "quiz_answer:"
 INSTANT_BLOCKS = "instant_blocks"
 INSTANT_BLOCK_PREFIX = "instant_block:"
@@ -1174,6 +1176,55 @@ def _explain_check_prompt_text(topic_title: str) -> str:
         "Без подглядывания в материал объясни, что помнишь: определения, "
         "нюансы, где встречается, где легко ошибиться.\n\n"
         "Ответь голосом или текстом следующим сообщением."
+    )
+
+
+def _review_explain_choice_text(topic_title: str) -> str:
+    return (
+        "<b>Пора повторить тему</b>\n\n"
+        f"Тема: <b>{html.escape(topic_title, quote=False)}</b>\n\n"
+        "Сначала объяснить своими словами без подглядывания в материал, а "
+        "потом пройти тест? Так вспоминать активнее, чем сразу отвечать на "
+        "вопросы теста."
+    )
+
+
+def _review_explain_choice_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🗣 Объяснить сначала",
+                    callback_data=f"{EXPLAIN_THEN_REVIEW_PREFIX}{task_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "▶️ Сразу тест",
+                    callback_data=f"{SKIP_EXPLAIN_REVIEW_PREFIX}{task_id}",
+                )
+            ],
+        ]
+    )
+
+
+def _review_ready_after_explain_text(topic_title: str) -> str:
+    return (
+        "<b>Объяснение готово</b>\n\n"
+        f"Можно начинать тест по теме «{html.escape(topic_title, quote=False)}»."
+    )
+
+
+def _review_ready_after_explain_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "▶️ Начать тест",
+                    callback_data=f"{SKIP_EXPLAIN_REVIEW_PREFIX}{task_id}",
+                )
+            ]
+        ]
     )
 
 
@@ -2715,6 +2766,61 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
         return
 
+    await query.edit_message_text(
+        _review_explain_choice_text(task.topic_title),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_review_explain_choice_keyboard(task.id),
+    )
+
+
+async def explain_then_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    task_id = (query.data or "").removeprefix(EXPLAIN_THEN_REVIEW_PREFIX).strip()
+    services = _services(context)
+    try:
+        task = services.review_tasks.get_task(task_id)
+    except ValueError:
+        await query.answer("Задача не найдена.", show_alert=True)
+        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
+        return
+
+    await query.answer()
+    context.user_data["awaiting_review_topic"] = False
+    context.user_data["awaiting_study_topic"] = False
+    context.user_data["awaiting_explanation_topic_id"] = task.topic_id
+    context.user_data["awaiting_explanation_then_task_id"] = task.id
+    log.info("Explain-before-review started task_id=%s topic_id=%s", task.id, task.topic_id)
+    await query.edit_message_text(
+        _explain_check_prompt_text(task.topic_title),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def skip_explain_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    task_id = (query.data or "").removeprefix(SKIP_EXPLAIN_REVIEW_PREFIX).strip()
+    services = _services(context)
+    try:
+        task = services.review_tasks.get_task(task_id)
+    except ValueError:
+        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
+        return
+
     await _show_quiz_size_choice(
         query,
         title=task.topic_title,
@@ -3324,6 +3430,7 @@ async def explain_check_topic_callback(update: Update, context: ContextTypes.DEF
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = topic.id
+    context.user_data["awaiting_explanation_then_task_id"] = ""
     log.info("Explain check topic selected topic_id=%s", topic.id)
     await query.edit_message_text(
         _explain_check_prompt_text(topic.title),
@@ -3341,6 +3448,7 @@ async def abort_explain_check_callback(update: Update, context: ContextTypes.DEF
         return
 
     context.user_data["awaiting_explanation_topic_id"] = ""
+    context.user_data["awaiting_explanation_then_task_id"] = ""
     await query.answer("Ок")
     await query.edit_message_text("Проверка объяснения отменена.")
 
@@ -3523,6 +3631,7 @@ async def _process_explanation_check(
     explanation_text: str,
     *,
     source: str,
+    follow_up_task_id: str = "",
 ) -> None:
     if not update.message:
         return
@@ -3594,6 +3703,7 @@ async def _process_explanation_check(
         explanation_text=explanation_text,
         result=result,
         material_fingerprint=materials.fingerprint,
+        linked_review_task_id=follow_up_task_id,
     )
     log.info(
         "Explain check saved id=%s topic_id=%s layer=%s priority=%s",
@@ -3618,6 +3728,14 @@ async def _process_explanation_check(
                 reply_markup=_explain_check_item_keyboard(item.id, status=item.status)
                 if index == last
                 else None,
+            )
+
+    if follow_up_task_id:
+        with contextlib.suppress(Exception):
+            await update.message.reply_text(
+                _review_ready_after_explain_text(item.topic_title),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_review_ready_after_explain_keyboard(follow_up_task_id),
             )
 
 
@@ -3732,9 +3850,11 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
 
+    follow_up_task_id = str(context.user_data.get("awaiting_explanation_then_task_id") or "")
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = ""
+    context.user_data["awaiting_explanation_then_task_id"] = ""
     await _edit_or_reply(
         update,
         wait_message,
@@ -3745,7 +3865,12 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _create_topic_inbox_item(update, context, query, source="voice")
     elif awaiting_explanation_topic_id:
         await _process_explanation_check(
-            update, context, awaiting_explanation_topic_id, query, source="voice"
+            update,
+            context,
+            awaiting_explanation_topic_id,
+            query,
+            source="voice",
+            follow_up_task_id=follow_up_task_id,
         )
     else:
         await _show_review_blocks(update, context)
@@ -3769,15 +3894,23 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     awaiting_explanation_topic_id = str(context.user_data.get("awaiting_explanation_topic_id") or "")
     if awaiting_explanation_topic_id and text not in MENU_BUTTONS:
+        follow_up_task_id = str(context.user_data.get("awaiting_explanation_then_task_id") or "")
         context.user_data["awaiting_explanation_topic_id"] = ""
+        context.user_data["awaiting_explanation_then_task_id"] = ""
         await _process_explanation_check(
-            update, context, awaiting_explanation_topic_id, text, source="text"
+            update,
+            context,
+            awaiting_explanation_topic_id,
+            text,
+            source="text",
+            follow_up_task_id=follow_up_task_id,
         )
         return
 
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = ""
+    context.user_data["awaiting_explanation_then_task_id"] = ""
     if text in (BTN_TOPICS, "Темы"):
         await _show_topics(update, context)
         return
@@ -4084,6 +4217,8 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(quiz_size_callback, pattern=f"^{QUIZ_SIZE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_quiz_size_callback, pattern=f"^{ABORT_QUIZ_SIZE}$"))
     app.add_handler(CallbackQueryHandler(start_review_callback, pattern=f"^{START_REVIEW_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(explain_then_review_callback, pattern=f"^{EXPLAIN_THEN_REVIEW_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(skip_explain_review_callback, pattern=f"^{SKIP_EXPLAIN_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(quiz_answer_callback, pattern=f"^{QUIZ_ANSWER_PREFIX}"))
     app.add_handler(CallbackQueryHandler(mistake_review_callback, pattern=f"^{MISTAKE_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(save_mistake_report_callback, pattern=f"^{SAVE_MISTAKE_REPORT_PREFIX}"))

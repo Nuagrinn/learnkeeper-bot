@@ -44,6 +44,15 @@ mistake review backlog and a first VPS deployment kit.
   question. Saved to its own `explanation_checks` table, fully independent
   from the mistake-work backlog above (different table, different service,
   different Telegram menu).
+- Explain-before-review: pressing "Начать тест" on a due scheduled review now
+  offers a choice — explain the topic first, or go straight to the quiz.
+  Explaining first reuses the exact same explain-check flow/agent above (no
+  separate feature) and, once done, shows a "▶️ Начать тест" button that starts
+  the same quiz flow as the skip path. The resulting explanation check is
+  tagged with `linked_review_task_id` so it can be joined against the review
+  task/quiz session later for stats (e.g. "did explaining first help?"). Does
+  not change the quiz/scoring/interval logic at all — purely an optional step
+  in front of it.
 - Optional `git pull --ff-only` before quiz generation, so VPS can refresh
   `interview-review` before reading materials.
 - VPS deployment files: systemd unit, bootstrap script, deploy script, SQLite
@@ -103,6 +112,7 @@ app/core/migrations/
   010_mistake_work_items.sql
   011_coding_reps.sql
   012_explanation_checks.sql
+  013_explanation_check_review_link.sql
 ```
 
 Apply pending migrations with:
