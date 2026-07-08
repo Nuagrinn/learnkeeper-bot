@@ -27,6 +27,7 @@ class ExplainCheckService:
         explanation_text: str,
         result: ExplainCheckResult,
         material_fingerprint: str = "",
+        linked_review_task_id: str = "",
         now: datetime | None = None,
     ) -> ExplanationCheck:
         created = (now or _now()).replace(microsecond=0)
@@ -51,6 +52,7 @@ class ExplainCheckService:
             prompt_version=result.prompt_version,
             created_at=created,
             updated_at=created,
+            linked_review_task_id=linked_review_task_id,
         )
         self._insert(item)
         return item
@@ -60,6 +62,23 @@ class ExplainCheckService:
 
     def list_done(self, *, limit: int = 20) -> list[ExplanationCheck]:
         return self._list_by_status(DONE, limit=limit)
+
+    def list_by_task(self, task_id: str) -> list[ExplanationCheck]:
+        """Explanation checks done right before a specific scheduled review task.
+
+        Powers future progress stats (e.g. "did explaining first help the score?")
+        by joining on review_tasks.id / quiz_sessions.task_id.
+        """
+        with self.db.session() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM explanation_checks
+                WHERE linked_review_task_id = ?
+                ORDER BY created_at DESC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [explanation_check_from_row(row) for row in rows]
 
     def get_item(self, item_id: str) -> ExplanationCheck | None:
         clean_id = item_id.strip()
@@ -150,9 +169,10 @@ class ExplainCheckService:
                     created_at,
                     updated_at,
                     done_at,
-                    deleted_at
+                    deleted_at,
+                    linked_review_task_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -177,6 +197,7 @@ class ExplainCheckService:
                     item.updated_at.isoformat(),
                     item.done_at.isoformat() if item.done_at else None,
                     item.deleted_at.isoformat() if item.deleted_at else None,
+                    item.linked_review_task_id,
                 ),
             )
 

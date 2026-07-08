@@ -31,6 +31,7 @@ class ExplanationCheck:
     updated_at: datetime
     done_at: datetime | None = None
     deleted_at: datetime | None = None
+    linked_review_task_id: str = ""
 
 
 def explanation_check_from_row(row: Row) -> ExplanationCheck:
@@ -59,6 +60,7 @@ def explanation_check_from_row(row: Row) -> ExplanationCheck:
         deleted_at=(
             datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None
         ),
+        linked_review_task_id=row["linked_review_task_id"],
     )
 
 

@@ -59,6 +59,37 @@ class ExplainCheckServiceTest(unittest.TestCase):
         self.assertEqual(DELETED, deleted.status)
         self.assertEqual([], self.service.list_done())
 
+    def test_create_item_links_to_review_task_for_stats(self) -> None:
+        result = ExplainCheckResult(
+            layer_reached=3,
+            priority="low",
+            summary="Верно объяснил.",
+            covered_concepts=[],
+            missing_concepts=[],
+            false_models=[],
+            follow_up_question="",
+            provider="fake",
+            model="fake",
+        )
+
+        item = self.service.create_item(
+            topic=self.topic,
+            source="text",
+            explanation_text="...",
+            result=result,
+            linked_review_task_id="task-123",
+        )
+
+        self.assertEqual("task-123", item.linked_review_task_id)
+        self.assertEqual([item], self.service.list_by_task("task-123"))
+        self.assertEqual([], self.service.list_by_task("other-task"))
+
+        # standalone (on-demand) checks are not linked to any review task
+        standalone = self.service.create_item(
+            topic=self.topic, source="text", explanation_text="...", result=result,
+        )
+        self.assertEqual("", standalone.linked_review_task_id)
+
     def test_get_item_returns_none_for_missing_id(self) -> None:
         self.assertIsNone(self.service.get_item("does-not-exist"))
 

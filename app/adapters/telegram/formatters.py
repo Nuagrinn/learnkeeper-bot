@@ -418,6 +418,8 @@ def format_explain_check_report(item: ExplanationCheck) -> str:
     ]
     if item.section:
         lines.append(f"<b>Блок:</b> {_h(item.section)}")
+    if item.linked_review_task_id:
+        lines.append("<b>Контекст:</b> перед плановым повтором")
     lines.extend(
         [
             f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
