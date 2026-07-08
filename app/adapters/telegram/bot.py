@@ -1237,6 +1237,23 @@ def _read_material_filename(topic_id: str, source_path: str) -> str:
     return f"{topic_id}-{Path(source_path).name}"
 
 
+def _read_material_input_file(topic_id: str, material) -> InputFile:
+    """Build an InputFile with an explicit UTF-8 charset in its MIME type.
+
+    Without this, InputFile only guesses a bare "text/markdown" from the
+    extension (no charset), and Telegram's mobile client has been observed to
+    mis-detect the encoding of Cyrillic-heavy documents sent this way (garbled
+    "mojibake" text), even though the exact same UTF-8 bytes render correctly
+    when attached as a local file from the Telegram Desktop UI.
+    """
+    input_file = InputFile(
+        material.content.encode("utf-8"),
+        filename=_read_material_filename(topic_id, material.source_path),
+    )
+    input_file.mimetype = f"{input_file.mimetype}; charset=utf-8"
+    return input_file
+
+
 def _explain_check_prompt_text(topic_title: str) -> str:
     return (
         "<b>Расскажи своими словами</b>\n\n"
@@ -3616,20 +3633,22 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
 
     await _sync_materials_repo(context, "read-material-topic")
     materials = services.repo.get_topic_materials(topic)
-    if not materials.files:
-        await query.edit_message_text(f"Материалы для темы «{topic.title}» не найдены.")
+    readable_files = [
+        material
+        for material in materials.files
+        if Path(material.source_path).suffix.lower() not in CODE_FILE_EXTENSIONS
+    ]
+    if not readable_files:
+        await query.edit_message_text(f"Читаемые материалы для темы «{topic.title}» не найдены.")
         return
 
-    log.info("Read material requested topic_id=%s files=%d", topic.id, len(materials.files))
+    log.info("Read material requested topic_id=%s files=%d", topic.id, len(readable_files))
     try:
-        if len(materials.files) == 1:
-            material = materials.files[0]
+        if len(readable_files) == 1:
+            material = readable_files[0]
             await context.bot.send_document(
                 chat_id=owner_id,
-                document=InputFile(
-                    material.content.encode("utf-8"),
-                    filename=_read_material_filename(topic.id, material.source_path),
-                ),
+                document=_read_material_input_file(topic.id, material),
                 caption=topic.title,
             )
         else:
@@ -3637,11 +3656,10 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
                 chat_id=owner_id,
                 media=[
                     InputMediaDocument(
-                        media=material.content.encode("utf-8"),
-                        filename=_read_material_filename(topic.id, material.source_path),
+                        media=_read_material_input_file(topic.id, material),
                         caption=topic.title if position == 0 else None,
                     )
-                    for position, material in enumerate(materials.files)
+                    for position, material in enumerate(readable_files)
                 ],
             )
     except Exception:
