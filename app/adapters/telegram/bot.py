@@ -148,6 +148,8 @@ READ_MATERIAL_BLOCKS = "read_material_blocks"
 READ_MATERIAL_BLOCK_PREFIX = "read_material_block:"
 READ_MATERIAL_TOPIC_PREFIX = "read_material_topic:"
 ABORT_READ_MATERIAL = "abort_read_material"
+UTF8_BOM = b"\xef\xbb\xbf"
+MARKDOWN_MATERIAL_EXTENSIONS = {".md", ".markdown"}
 GENERATION_FRAMES = ("⏳", "⌛")
 QUIZ_SIZE_OPTIONS = (5, 10, 20, 30)
 QUIZ_SIZE_REVIEW = "review"
@@ -1237,26 +1239,36 @@ def _read_material_filename(topic_id: str, source_path: str) -> str:
     return f"{topic_id}-{Path(source_path).name}"
 
 
+def _telegram_material_document_bytes(source_path: str, raw: bytes) -> bytes:
+    """Make UTF-8 Markdown unambiguous for Telegram mobile text viewers."""
+    if Path(source_path).suffix.lower() not in MARKDOWN_MATERIAL_EXTENSIONS:
+        return raw
+    if raw.startswith(UTF8_BOM):
+        return raw
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+    return UTF8_BOM + raw
+
+
 def _read_material_input_file(
     services: AppServices, topic_id: str, source_path: str
 ) -> InputFile | None:
-    """Build an InputFile from the file's raw bytes on disk, untouched.
+    """Build an InputFile without text/newline round-trips.
 
     Deliberately does NOT go through TopicMaterial.content: that field comes
     from Path.read_text(), which decodes to str and normalizes newlines
-    (CRLF -> LF) along the way. Re-encoding that str back to bytes should be
-    lossless for well-formed UTF-8, but empirically the result rendered as
-    mojibake on Telegram mobile, while attaching the same file locally from
-    disk (untouched bytes) rendered fine. Reading raw bytes directly here
-    matches that working path exactly and removes the str round-trip as a
-    variable. Also sets an explicit UTF-8 charset on the MIME type, since a
-    bare "text/markdown" (no charset) is what InputFile guesses by default.
+    (CRLF -> LF) along the way. Markdown gets a UTF-8 BOM only in the upload
+    copy so Telegram mobile does not render Cyrillic as Latin-1 mojibake.
     """
     raw = services.repo.read_material_bytes(source_path)
     if raw is None:
         return None
-    input_file = InputFile(raw, filename=_read_material_filename(topic_id, source_path))
-    input_file.mimetype = f"{input_file.mimetype}; charset=utf-8"
+    document_bytes = _telegram_material_document_bytes(source_path, raw)
+    input_file = InputFile(document_bytes, filename=_read_material_filename(topic_id, source_path))
+    if Path(source_path).suffix.lower() in MARKDOWN_MATERIAL_EXTENSIONS:
+        input_file.mimetype = "text/markdown; charset=utf-8"
     return input_file
 
 
@@ -3660,6 +3672,7 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
                 chat_id=owner_id,
                 document=input_files[0],
                 caption=topic.title,
+                disable_content_type_detection=True,
             )
         else:
             await context.bot.send_media_group(
@@ -3668,6 +3681,7 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
                     InputMediaDocument(
                         media=input_file,
                         caption=topic.title if position == 0 else None,
+                        disable_content_type_detection=True,
                     )
                     for position, input_file in enumerate(input_files)
                 ],
