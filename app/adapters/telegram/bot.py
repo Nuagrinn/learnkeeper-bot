@@ -27,6 +27,9 @@ from app.adapters.telegram.formatters import (
     format_cancel_review_confirm,
     format_cancel_review_done,
     format_cancel_review_list,
+    format_explain_check_created,
+    format_explain_check_list,
+    format_explain_check_report,
     format_mistake_review_preview,
     format_mistake_work_created,
     format_mistake_work_item,
@@ -60,11 +63,14 @@ from app.features.mistake_work.agent import MistakeReviewAgentError, MistakeRevi
 from app.features.mistake_work.factory import build_mistake_review_agent
 from app.features.mistake_work.service import MistakeWorkService
 from app.features.quiz.factory import build_quiz_generator
-from app.features.quiz.generator import QuizGenerationError
+from app.features.quiz.generator import CODE_FILE_EXTENSIONS, MATERIAL_CHAR_LIMIT, QuizGenerationError
 from app.features.quiz.models import QuizQuestion, QuizSession
 from app.features.quiz.service import QuestionClosedError, QuizService
 from app.features.coding_reps.service import CodingRepsService
 from app.features.daily_quiz.service import DailyQuizService
+from app.features.explain_check.agent import ExplainCheckAgentError, ExplainCheckInput
+from app.features.explain_check.factory import build_explain_check_agent
+from app.features.explain_check.service import ExplainCheckService
 from app.features.review_tasks.service import ReviewTaskService, TopicNotReadyError
 from app.features.speech.factory import build_speech_to_text
 from app.features.speech.service import SpeechToTextError
@@ -101,6 +107,9 @@ MENU_TOPIC_ADD = "menu_topic_add"
 MENU_TOPIC_INBOX = "menu_topic_inbox"
 MENU_MISTAKE_WORK = "menu_mistake_work"
 MENU_MISTAKE_WORK_DONE = "menu_mistake_work_done"
+MENU_EXPLAIN_CHECK = "menu_explain_check"
+MENU_EXPLAIN_CHECK_LIST = "menu_explain_check_list"
+MENU_EXPLAIN_CHECK_DONE = "menu_explain_check_done"
 MENU_DAILY_SETTINGS = "menu_daily_settings"
 MENU_CODING_REPS_SETTINGS = "menu_coding_reps_settings"
 MENU_LLM_USAGE = "menu_llm_usage"
@@ -119,6 +128,13 @@ SAVE_MISTAKE_REPORT_PREFIX = "save_mistake_report:"
 MISTAKE_WORK_OPEN_PREFIX = "mistake_work_open:"
 MISTAKE_WORK_DONE_PREFIX = "mistake_work_done:"
 MISTAKE_WORK_DELETE_PREFIX = "mistake_work_delete:"
+EXPLAIN_CHECK_BLOCKS = "explain_check_blocks"
+EXPLAIN_CHECK_BLOCK_PREFIX = "explain_check_block:"
+EXPLAIN_CHECK_TOPIC_PREFIX = "explain_check_topic:"
+ABORT_EXPLAIN_CHECK = "abort_explain_check"
+EXPLAIN_CHECK_OPEN_PREFIX = "explain_check_open:"
+EXPLAIN_CHECK_DONE_PREFIX = "explain_check_done:"
+EXPLAIN_CHECK_DELETE_PREFIX = "explain_check_delete:"
 GENERATION_FRAMES = ("⏳", "⌛")
 QUIZ_SIZE_OPTIONS = (5, 10, 20, 30)
 QUIZ_SIZE_REVIEW = "review"
@@ -143,6 +159,10 @@ BTN_TOPIC_INBOX = "📥 Список идей"
 BTN_MISTAKE_WORK = "🧩 Работа над ошибками"
 BTN_MISTAKE_WORK_ACTIVE = "📋 Активные отчеты"
 BTN_MISTAKE_WORK_DONE = "✅ Проработанные"
+BTN_EXPLAIN_CHECK = "🗣 Объяснить тему"
+BTN_EXPLAIN_CHECK_START = "▶️ Объяснить новую тему"
+BTN_EXPLAIN_CHECK_LIST = "📋 Мои объяснения"
+BTN_EXPLAIN_CHECK_DONE = "✅ Разобранные"
 BTN_SCHEDULE = "🗓 Расписание"
 BTN_DUE = "⏰ Пора повторять"
 BTN_HELP = "❔ Помощь"
@@ -165,6 +185,10 @@ LEGACY_MENU_BUTTONS = {
     "Работа над ошибками",
     "Активные отчеты",
     "Проработанные",
+    "Объяснить тему",
+    "Объяснить новую тему",
+    "Мои объяснения",
+    "Разобранные",
     "Расписание",
     "Пора повторять",
     "Помощь",
@@ -188,6 +212,10 @@ MENU_BUTTONS = {
     BTN_MISTAKE_WORK,
     BTN_MISTAKE_WORK_ACTIVE,
     BTN_MISTAKE_WORK_DONE,
+    BTN_EXPLAIN_CHECK,
+    BTN_EXPLAIN_CHECK_START,
+    BTN_EXPLAIN_CHECK_LIST,
+    BTN_EXPLAIN_CHECK_DONE,
     BTN_SCHEDULE,
     BTN_DUE,
     BTN_HELP,
@@ -231,6 +259,11 @@ class AppServices:
         )
         self.mistake_work = MistakeWorkService(self.db)
         self.mistake_review_agent = build_mistake_review_agent(
+            settings,
+            usage_recorder=self.llm_usage,
+        )
+        self.explain_check = ExplainCheckService(self.db)
+        self.explain_check_agent = build_explain_check_agent(
             settings,
             usage_recorder=self.llm_usage,
         )
@@ -535,7 +568,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"<b>{BTN_TOPICS}</b> - список тем из interview-review\n"
         f"<b>{BTN_REVIEW_MENU}</b> - добавить, посмотреть или отменить повторы\n"
         f"<b>{BTN_TEST_MENU}</b> - моментальные и ежедневные тесты\n"
-        f"<b>{BTN_IDEAS_MENU}</b> - идеи тем и отчеты по ошибкам\n"
+        f"<b>{BTN_IDEAS_MENU}</b> - идеи тем, отчеты по ошибкам, объяснить тему своими словами\n"
         f"<b>{BTN_SETTINGS_MENU}</b> - переключатели и статистика LLM\n\n"
         "Slash-команды тоже работают, если они удобнее: "
         "<code>/topics</code>, <code>/review_add</code>, "
@@ -664,6 +697,16 @@ async def _show_mistake_work_menu(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+async def _show_explain_check_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _send_section_menu(
+        update,
+        "🗣 Объяснить тему",
+        "Расскажи тему своими словами без подглядывания в материал — агент "
+        "сверит с эталоном и покажет, что упущено.",
+        _explain_check_menu_keyboard(),
+    )
+
+
 async def _show_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_section_menu(
         update,
@@ -700,6 +743,7 @@ def _ideas_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(BTN_STUDY_TOPICS, callback_data=MENU_STUDY_TOPICS)],
             [InlineKeyboardButton(BTN_MISTAKE_WORK, callback_data=MENU_MISTAKE_WORK)],
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK, callback_data=MENU_EXPLAIN_CHECK)],
         ]
     )
 
@@ -709,6 +753,16 @@ def _study_topics_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(BTN_TOPIC_ADD, callback_data=MENU_TOPIC_ADD)],
             [InlineKeyboardButton(BTN_TOPIC_INBOX, callback_data=MENU_TOPIC_INBOX)],
+        ]
+    )
+
+
+def _explain_check_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK_START, callback_data=EXPLAIN_CHECK_BLOCKS)],
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK_LIST, callback_data=MENU_EXPLAIN_CHECK_LIST)],
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK_DONE, callback_data=MENU_EXPLAIN_CHECK_DONE)],
         ]
     )
 
@@ -839,6 +893,28 @@ async def _show_mistake_work_done(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+async def _show_explain_check_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    items = _services(context).explain_check.list_active(limit=20)
+    if not update.message:
+        return
+    await update.message.reply_text(
+        format_explain_check_list(items, status_title="Мои объяснения"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_list_keyboard(items) if items else _main_keyboard(),
+    )
+
+
+async def _show_explain_check_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    items = _services(context).explain_check.list_done(limit=20)
+    if not update.message:
+        return
+    await update.message.reply_text(
+        format_explain_check_list(items, status_title="Разобранные объяснения"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_list_keyboard(items) if items else _main_keyboard(),
+    )
+
+
 def _mistake_work_list_keyboard(items) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for item in items:
@@ -873,6 +949,43 @@ def _mistake_work_item_keyboard(item_id: str, *, status: str) -> InlineKeyboardM
         ]
     )
     rows.append([InlineKeyboardButton("К активным", callback_data=MENU_MISTAKE_WORK)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _explain_check_list_keyboard(items) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"Открыть: {item.topic_title}"),
+                    callback_data=f"{EXPLAIN_CHECK_OPEN_PREFIX}{item.id}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
+
+
+def _explain_check_item_keyboard(item_id: str, *, status: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if status == "active":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "Отметить разобранным",
+                    callback_data=f"{EXPLAIN_CHECK_DONE_PREFIX}{item_id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "Удалить",
+                callback_data=f"{EXPLAIN_CHECK_DELETE_PREFIX}{item_id}",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton("К моим объяснениям", callback_data=MENU_EXPLAIN_CHECK_LIST)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1005,6 +1118,65 @@ def _review_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _explain_check_blocks_text(grouped: dict[str, list]) -> str:
+    total = sum(len(topics) for topics in grouped.values())
+    return (
+        "<b>Объяснить тему</b>\n\n"
+        f"Готовых тем: <b>{total}</b>\n"
+        "Выбери блок."
+    )
+
+
+def _explain_check_topics_text(section: str, topics: list) -> str:
+    return (
+        "<b>Объяснить тему</b>\n\n"
+        f"<b>{html.escape(section, quote=False)}</b>\n"
+        f"Тем: <b>{len(topics)}</b>\n\n"
+        "Выбери тему, которую расскажешь своими словами."
+    )
+
+
+def _explain_check_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, (section, topics) in enumerate(grouped.items()):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{section} ({len(topics)})"),
+                    callback_data=f"{EXPLAIN_CHECK_BLOCK_PREFIX}{index}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_EXPLAIN_CHECK)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _explain_check_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for topic in topics:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{topic.id} · {topic.title}"),
+                    callback_data=f"{EXPLAIN_CHECK_TOPIC_PREFIX}{topic.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("К блокам", callback_data=EXPLAIN_CHECK_BLOCKS)])
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_EXPLAIN_CHECK)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _explain_check_prompt_text(topic_title: str) -> str:
+    return (
+        "<b>Расскажи своими словами</b>\n\n"
+        f"Тема: <b>{html.escape(topic_title, quote=False)}</b>\n\n"
+        "Без подглядывания в материал объясни, что помнишь: определения, "
+        "нюансы, где встречается, где легко ошибиться.\n\n"
+        "Ответь голосом или текстом следующим сообщением."
+    )
+
+
 def _review_existing_keyboard(topic_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -1035,6 +1207,25 @@ async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYP
         _instant_blocks_text(grouped),
         parse_mode=ParseMode.HTML,
         reply_markup=_instant_block_keyboard(grouped),
+    )
+
+
+async def _show_explain_check_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "explain-check-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await _answer_long(
+            update,
+            "<b>Объяснить тему</b>\n\n"
+            "В interview-review пока нет ready-тем с читаемыми материалами.",
+        )
+        return
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _explain_check_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_block_keyboard(grouped),
     )
 
 
@@ -2076,6 +2267,130 @@ async def mistake_work_delete_callback(update: Update, context: ContextTypes.DEF
     )
 
 
+async def menu_explain_check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await query.edit_message_text(
+        "<b>🗣 Объяснить тему</b>\n\n"
+        "Расскажи тему своими словами без подглядывания в материал — агент "
+        "сверит с эталоном и покажет, что упущено.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_menu_keyboard(),
+    )
+
+
+async def menu_explain_check_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    items = _services(context).explain_check.list_active(limit=20)
+    await query.edit_message_text(
+        format_explain_check_list(items, status_title="Мои объяснения"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_list_keyboard(items) if items else _explain_check_menu_keyboard(),
+    )
+
+
+async def menu_explain_check_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    items = _services(context).explain_check.list_done(limit=20)
+    await query.edit_message_text(
+        format_explain_check_list(items, status_title="Разобранные объяснения"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_list_keyboard(items) if items else _explain_check_menu_keyboard(),
+    )
+
+
+async def explain_check_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    item_id = (query.data or "").removeprefix(EXPLAIN_CHECK_OPEN_PREFIX).strip()
+    item = _services(context).explain_check.get_item(item_id)
+    if not item:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+    await query.answer()
+    await query.edit_message_text(
+        format_explain_check_report(item),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_item_keyboard(item.id, status=item.status),
+    )
+
+
+async def explain_check_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    item_id = (query.data or "").removeprefix(EXPLAIN_CHECK_DONE_PREFIX).strip()
+    try:
+        item = _services(context).explain_check.mark_done(item_id)
+    except ValueError:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+    await query.answer("Готово")
+    await query.edit_message_text(
+        format_explain_check_report(item),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_item_keyboard(item.id, status=item.status),
+    )
+
+
+async def explain_check_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    item_id = (query.data or "").removeprefix(EXPLAIN_CHECK_DELETE_PREFIX).strip()
+    try:
+        _services(context).explain_check.delete_item(item_id)
+    except ValueError:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+    await query.answer("Удалено")
+    items = _services(context).explain_check.list_active(limit=20)
+    await query.edit_message_text(
+        format_explain_check_list(items, status_title="Мои объяснения"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_list_keyboard(items) if items else _explain_check_menu_keyboard(),
+    )
+
+
 async def menu_daily_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -2932,6 +3247,104 @@ async def review_topic_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def explain_check_blocks_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await _sync_materials_repo(context, "explain-check-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await query.edit_message_text(
+            "<b>Объяснить тему</b>\n\n"
+            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await query.edit_message_text(
+        _explain_check_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_block_keyboard(grouped),
+    )
+
+
+async def explain_check_block_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    raw_index = (query.data or "").removeprefix(EXPLAIN_CHECK_BLOCK_PREFIX)
+    try:
+        index = int(raw_index)
+    except ValueError:
+        await query.edit_message_text("Не понял выбранный блок. Нажми «Объяснить тему» еще раз.")
+        return
+
+    grouped = _ready_review_topics_by_section(_services(context))
+    sections = list(grouped.items())
+    if index < 0 or index >= len(sections):
+        await query.edit_message_text("Список блоков устарел. Нажми «Объяснить тему» еще раз.")
+        return
+
+    section, topics = sections[index]
+    await query.edit_message_text(
+        _explain_check_topics_text(section, topics),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_explain_check_topic_keyboard(topics),
+    )
+
+
+async def explain_check_topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    services = _services(context)
+    topic_id = (query.data or "").removeprefix(EXPLAIN_CHECK_TOPIC_PREFIX).strip().lower()
+    topic = services.repo.get_topic(topic_id)
+    if not topic:
+        await query.edit_message_text("Тема не найдена. Нажми «Объяснить тему» еще раз.")
+        return
+
+    context.user_data["awaiting_review_topic"] = False
+    context.user_data["awaiting_study_topic"] = False
+    context.user_data["awaiting_explanation_topic_id"] = topic.id
+    log.info("Explain check topic selected topic_id=%s", topic.id)
+    await query.edit_message_text(
+        _explain_check_prompt_text(topic.title),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def abort_explain_check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    context.user_data["awaiting_explanation_topic_id"] = ""
+    await query.answer("Ок")
+    await query.edit_message_text("Проверка объяснения отменена.")
+
+
 async def reset_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -3028,6 +3441,186 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
     log.exception("Unhandled Telegram error while handling update=%s", update, exc_info=error)
 
 
+def _explain_check_material(services: AppServices, topic) -> list[dict[str, str]]:
+    """Doc-only, capped material for the explain-check agent.
+
+    Deliberately a local copy of quiz.generator's doc-file selection + char cap
+    (reusing its public CODE_FILE_EXTENSIONS/MATERIAL_CHAR_LIMIT constants but not
+    its private helpers), so this feature has no code dependency on the quiz
+    module beyond two shared constants.
+    """
+    materials = services.repo.get_topic_materials(topic)
+    doc_files = [
+        file
+        for file in materials.files
+        if Path(file.source_path).suffix.lower() not in CODE_FILE_EXTENSIONS
+    ]
+    if not doc_files:
+        doc_files = materials.files
+    remaining = MATERIAL_CHAR_LIMIT
+    context: list[dict[str, str]] = []
+    for file in doc_files:
+        if remaining <= 0:
+            break
+        excerpt = file.content[:remaining]
+        remaining -= len(excerpt)
+        context.append({"source_path": file.source_path, "excerpt": excerpt})
+    return context
+
+
+def _explain_check_wait_text(*, frame: str, elapsed_seconds: int = 0) -> str:
+    return (
+        f"{frame} <b>Проверяю объяснение</b>\n\n"
+        "Сверяю с материалом темы. Жду ответ агента...\n"
+        f"Ожидание: {_format_wait_elapsed(elapsed_seconds)}\n\n"
+        "Это может занять до пары минут."
+    )
+
+
+async def _animate_explain_check_message(message) -> None:
+    index = 0
+    started_at = perf_counter()
+    while True:
+        await asyncio.sleep(3)
+        index += 1
+        elapsed = int(perf_counter() - started_at)
+        if index == 1 or index % 4 == 0:
+            log.info("Explain check still waiting elapsed=%ss", elapsed)
+        with contextlib.suppress(Exception):
+            await message.edit_text(
+                _explain_check_wait_text(
+                    frame=GENERATION_FRAMES[index % len(GENERATION_FRAMES)],
+                    elapsed_seconds=elapsed,
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+
+async def _finish_explain_check_message(
+    update: Update,
+    message,
+    text: str,
+    *,
+    reply_markup=None,
+) -> None:
+    """Edit the wait message into the final result, without touching the shared
+    _edit_or_reply helper other flows rely on."""
+    try:
+        await message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        return
+    except BadRequest as exc:
+        if "Message is not modified" in str(exc):
+            return
+        log.warning("Could not edit explain-check message, sending a new one: %s", exc)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+
+async def _process_explanation_check(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    topic_id: str,
+    explanation_text: str,
+    *,
+    source: str,
+) -> None:
+    if not update.message:
+        return
+    services = _services(context)
+    topic = services.repo.get_topic(topic_id)
+    if not topic:
+        await _answer_long(
+            update,
+            "Тема для объяснения уже не найдена. Открой «Объяснить тему» заново.",
+        )
+        return
+
+    material_context = _explain_check_material(services, topic)
+    if not material_context:
+        await _answer_long(update, "У темы нет читаемых материалов для проверки.")
+        return
+
+    wait_message = await update.message.reply_text(
+        _explain_check_wait_text(frame=GENERATION_FRAMES[0]),
+        parse_mode=ParseMode.HTML,
+    )
+    animation_task = asyncio.create_task(_animate_explain_check_message(wait_message))
+    request = ExplainCheckInput(
+        topic_id=topic.id,
+        topic_title=topic.title,
+        section=topic.section,
+        source=source,
+        explanation_text=explanation_text,
+        material_context=material_context,
+    )
+    log.info(
+        "Explain check queued topic_id=%s source=%s explanation_len=%s",
+        topic.id,
+        source,
+        len(explanation_text),
+    )
+    try:
+        result = await asyncio.to_thread(services.explain_check_agent.check, request)
+    except ExplainCheckAgentError as exc:
+        await _stop_animation_task(animation_task)
+        log.warning("Explain check failed topic_id=%s error=%s", topic.id, exc)
+        await _finish_explain_check_message(
+            update,
+            wait_message,
+            _generation_error_text(
+                exc,
+                "<b>Не удалось проверить объяснение</b>\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}",
+            ),
+        )
+        return
+    except Exception as exc:
+        await _stop_animation_task(animation_task)
+        log.exception("Explain check failed unexpectedly topic_id=%s", topic.id)
+        await _finish_explain_check_message(
+            update,
+            wait_message,
+            "<b>Не удалось проверить объяснение</b>\n\n"
+            f"Причина: {html.escape(str(exc), quote=False)}",
+        )
+        return
+    finally:
+        await _stop_animation_task(animation_task)
+
+    materials = services.repo.get_topic_materials(topic)
+    item = services.explain_check.create_item(
+        topic=topic,
+        source=source,
+        explanation_text=explanation_text,
+        result=result,
+        material_fingerprint=materials.fingerprint,
+    )
+    log.info(
+        "Explain check saved id=%s topic_id=%s layer=%s priority=%s",
+        item.id,
+        topic.id,
+        item.layer_reached,
+        item.priority,
+    )
+    chunks = split_message(format_explain_check_report(item))
+    last = len(chunks) - 1
+    await _finish_explain_check_message(
+        update,
+        wait_message,
+        chunks[0],
+        reply_markup=_explain_check_item_keyboard(item.id, status=item.status) if last == 0 else None,
+    )
+    for index in range(1, len(chunks)):
+        with contextlib.suppress(Exception):
+            await update.message.reply_text(
+                chunks[index],
+                parse_mode=ParseMode.HTML,
+                reply_markup=_explain_check_item_keyboard(item.id, status=item.status)
+                if index == last
+                else None,
+            )
+
+
 def _voice_audio_path(services: AppServices, file_id: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     token = "".join(ch if ch.isalnum() else "-" for ch in file_id)[:16] or "voice"
@@ -3044,7 +3637,8 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     voice = update.message.voice
     awaiting_review = bool(context.user_data.get("awaiting_review_topic"))
     awaiting_study = bool(context.user_data.get("awaiting_study_topic"))
-    if awaiting_review and not awaiting_study:
+    awaiting_explanation_topic_id = str(context.user_data.get("awaiting_explanation_topic_id") or "")
+    if awaiting_review and not awaiting_study and not awaiting_explanation_topic_id:
         context.user_data["awaiting_review_topic"] = False
         log.info(
             "Voice message rejected for review flow duration=%s file_id=%s",
@@ -3057,7 +3651,7 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Открой <b>{BTN_REVIEW_MENU}</b> → <b>{BTN_REVIEW_ADD}</b>, затем выбери блок и тему кнопками.",
         )
         return
-    if not awaiting_review and not awaiting_study:
+    if not awaiting_review and not awaiting_study and not awaiting_explanation_topic_id:
         log.info(
             "Voice message rejected outside command flow duration=%s file_id=%s",
             voice.duration,
@@ -3068,7 +3662,8 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "Голосовое не обработал: сейчас я не жду команду.\n\n"
             "Распознавание не запускал, чтобы не делать лишнюю работу.\n"
             f"Для повтора открой <b>{BTN_REVIEW_MENU}</b>.\n"
-            f"Голосом сейчас можно пользоваться после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_TOPIC_ADD}</b>.",
+            f"Голосом сейчас можно пользоваться после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_TOPIC_ADD}</b> "
+            f"или после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_EXPLAIN_CHECK}</b>.",
         )
         return
 
@@ -3139,6 +3734,7 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
+    context.user_data["awaiting_explanation_topic_id"] = ""
     await _edit_or_reply(
         update,
         wait_message,
@@ -3147,6 +3743,10 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
     if awaiting_study:
         await _create_topic_inbox_item(update, context, query, source="voice")
+    elif awaiting_explanation_topic_id:
+        await _process_explanation_check(
+            update, context, awaiting_explanation_topic_id, query, source="voice"
+        )
     else:
         await _show_review_blocks(update, context)
     log.info("Voice processing finished elapsed=%.2fs", perf_counter() - started_at)
@@ -3167,9 +3767,17 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data["awaiting_study_topic"] = False
         await _create_topic_inbox_item(update, context, text, source="text_after_button")
         return
+    awaiting_explanation_topic_id = str(context.user_data.get("awaiting_explanation_topic_id") or "")
+    if awaiting_explanation_topic_id and text not in MENU_BUTTONS:
+        context.user_data["awaiting_explanation_topic_id"] = ""
+        await _process_explanation_check(
+            update, context, awaiting_explanation_topic_id, text, source="text"
+        )
+        return
 
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
+    context.user_data["awaiting_explanation_topic_id"] = ""
     if text in (BTN_TOPICS, "Темы"):
         await _show_topics(update, context)
         return
@@ -3225,6 +3833,18 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if text in (BTN_MISTAKE_WORK_DONE, "Проработанные"):
         await _show_mistake_work_done(update, context)
+        return
+    if text in (BTN_EXPLAIN_CHECK_START, "Объяснить новую тему"):
+        await _show_explain_check_blocks(update, context)
+        return
+    if text in (BTN_EXPLAIN_CHECK, "Объяснить тему"):
+        await _show_explain_check_menu(update, context)
+        return
+    if text in (BTN_EXPLAIN_CHECK_LIST, "Мои объяснения"):
+        await _show_explain_check_active(update, context)
+        return
+    if text in (BTN_EXPLAIN_CHECK_DONE, "Разобранные"):
+        await _show_explain_check_done(update, context)
         return
     if text in (BTN_REVIEW_CANCEL, "Удалить повтор"):
         await _show_cancel_reviews(update, context)
@@ -3426,6 +4046,10 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(review_topic_callback, pattern=f"^{REVIEW_TOPIC_PREFIX}"))
     app.add_handler(CallbackQueryHandler(reset_review_callback, pattern=f"^{RESET_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_review_add_callback, pattern=f"^{ABORT_REVIEW_ADD}$"))
+    app.add_handler(CallbackQueryHandler(explain_check_blocks_callback, pattern=f"^{EXPLAIN_CHECK_BLOCKS}$"))
+    app.add_handler(CallbackQueryHandler(explain_check_block_callback, pattern=f"^{EXPLAIN_CHECK_BLOCK_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(explain_check_topic_callback, pattern=f"^{EXPLAIN_CHECK_TOPIC_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(abort_explain_check_callback, pattern=f"^{ABORT_EXPLAIN_CHECK}$"))
     app.add_handler(CallbackQueryHandler(menu_schedule_callback, pattern=f"^{MENU_SCHEDULE}$"))
     app.add_handler(CallbackQueryHandler(menu_due_callback, pattern=f"^{MENU_DUE}$"))
     app.add_handler(CallbackQueryHandler(menu_cancel_reviews_callback, pattern=f"^{MENU_CANCEL_REVIEWS}$"))
@@ -3434,6 +4058,9 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(menu_topic_inbox_callback, pattern=f"^{MENU_TOPIC_INBOX}$"))
     app.add_handler(CallbackQueryHandler(menu_mistake_work_callback, pattern=f"^{MENU_MISTAKE_WORK}$"))
     app.add_handler(CallbackQueryHandler(menu_mistake_work_done_callback, pattern=f"^{MENU_MISTAKE_WORK_DONE}$"))
+    app.add_handler(CallbackQueryHandler(menu_explain_check_callback, pattern=f"^{MENU_EXPLAIN_CHECK}$"))
+    app.add_handler(CallbackQueryHandler(menu_explain_check_list_callback, pattern=f"^{MENU_EXPLAIN_CHECK_LIST}$"))
+    app.add_handler(CallbackQueryHandler(menu_explain_check_done_callback, pattern=f"^{MENU_EXPLAIN_CHECK_DONE}$"))
     app.add_handler(CallbackQueryHandler(menu_daily_settings_callback, pattern=f"^{MENU_DAILY_SETTINGS}$"))
     app.add_handler(
         CallbackQueryHandler(
@@ -3472,6 +4099,9 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(mistake_work_open_callback, pattern=f"^{MISTAKE_WORK_OPEN_PREFIX}"))
     app.add_handler(CallbackQueryHandler(mistake_work_done_callback, pattern=f"^{MISTAKE_WORK_DONE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(mistake_work_delete_callback, pattern=f"^{MISTAKE_WORK_DELETE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(explain_check_open_callback, pattern=f"^{EXPLAIN_CHECK_OPEN_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(explain_check_done_callback, pattern=f"^{EXPLAIN_CHECK_DONE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(explain_check_delete_callback, pattern=f"^{EXPLAIN_CHECK_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.VOICE, menu_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_text))
     app.add_handler(MessageHandler(filters.ALL, fallback))

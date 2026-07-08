@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 
 from app.core.repo import RepoTopic
+from app.features.explain_check.models import ExplanationCheck
 from app.features.llm_usage.models import LlmUsageStats
 from app.features.mistake_work.agent import MistakeReviewResult
 from app.features.mistake_work.models import MistakeWorkItem
@@ -340,6 +341,110 @@ def format_mistake_work_item(item: MistakeWorkItem) -> str:
                 lines.append(f"Верная идея: {_h(_clip(correct, 350))}")
             if practice:
                 lines.append(f"Практика: <i>{_h(_clip(practice, 250))}</i>")
+    if item.agent_provider:
+        provider = item.agent_provider
+        if item.agent_model:
+            provider = f"{provider} {item.agent_model}"
+        lines.extend(["", f"<b>Agent:</b> <code>{_h(provider)}</code>"])
+    return "\n".join(lines)
+
+
+_LAYER_LABELS = {
+    1: "1/4 — узнавание",
+    2: "2/4 — воспроизведение",
+    3: "3/4 — применение",
+    4: "4/4 — перенос",
+}
+
+
+def _layer_label(layer: int) -> str:
+    return _LAYER_LABELS.get(layer, f"{layer}/4")
+
+
+def _explain_check_status_label(status: str) -> str:
+    labels = {
+        "active": "активно",
+        "done": "разобрано",
+        "deleted": "удалено",
+    }
+    return labels.get(status, status)
+
+
+def format_explain_check_created(item: ExplanationCheck) -> str:
+    return "\n".join(
+        [
+            "<b>Объяснение проверено и сохранено</b>",
+            "",
+            f"<b>Тема:</b> {_h(item.topic_title)}",
+            f"<b>Слой:</b> {_h(_layer_label(item.layer_reached))}",
+            f"<b>Приоритет:</b> {_h(_priority_label(item.priority))}",
+            f"<b>ID:</b> <code>{_h(item.id)}</code>",
+            "",
+            "Он лежит в разделе <b>Проработка</b> → <b>Объяснить тему</b> → <b>Мои объяснения</b>.",
+        ]
+    )
+
+
+def format_explain_check_list(
+    items: list[ExplanationCheck],
+    *,
+    status_title: str = "Мои объяснения",
+) -> str:
+    if not items:
+        return f"<b>{_h(status_title)}</b>\n\nСписок пуст."
+    lines = [
+        f"<b>{_h(status_title)}</b>",
+        f"Всего: <b>{len(items)}</b>",
+        "",
+    ]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"<b>{index}.</b> {_h(_priority_icon(item.priority))} {_h(item.topic_title)}")
+        lines.append(f"<b>Блок:</b> {_h(item.section) or '-'} · <b>Слой:</b> {_h(_layer_label(item.layer_reached))}")
+        lines.append(f"<b>Создано:</b> <code>{item.created_at:%d-%m-%Y}</code>")
+        lines.append(f"ID: <code>{_h(item.id)}</code>")
+        lines.append("")
+    lines.append("Открой запись кнопкой ниже, чтобы прочитать разбор, отметить разобранной или удалить.")
+    return "\n".join(lines).strip()
+
+
+def format_explain_check_report(item: ExplanationCheck) -> str:
+    lines = [
+        "<b>Проверка объяснения</b>",
+        "",
+        f"<b>Тема:</b> {_h(item.topic_title)}",
+        f"<b>Статус:</b> {_h(_explain_check_status_label(item.status))}",
+        f"<b>Слой понимания:</b> {_h(_layer_label(item.layer_reached))}",
+        f"<b>Приоритет:</b> {_h(_priority_label(item.priority))}",
+    ]
+    if item.section:
+        lines.append(f"<b>Блок:</b> {_h(item.section)}")
+    lines.extend(
+        [
+            f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
+            f"<b>ID:</b> <code>{_h(item.id)}</code>",
+            "",
+            f"<b>Коротко:</b> {_h(_clip_inline(item.summary, 400))}",
+        ]
+    )
+    if item.covered_concepts:
+        lines.extend(["", "<b>Что точно объяснил</b>"])
+        lines.extend(f"- {_h(concept)}" for concept in item.covered_concepts[:8])
+    if item.missing_concepts:
+        lines.extend(["", "<b>Что упустил</b>"])
+        lines.extend(f"- {_h(concept)}" for concept in item.missing_concepts[:8])
+    if item.false_models:
+        lines.extend(["", "<b>Ложные модели → верные модели</b>"])
+        for pair in item.false_models[:6]:
+            false_model = str(pair.get("false_model") or "").strip()
+            correct_model = str(pair.get("correct_model") or "").strip()
+            if not false_model:
+                continue
+            lines.append(f"- ❌ {_h(_clip_inline(false_model, 200))}")
+            if correct_model:
+                lines.append(f"  ✅ {_h(_clip_inline(correct_model, 200))}")
+    if item.follow_up_question:
+        lines.extend(["", "<b>Вопрос на подумать</b>", _h(_clip_inline(item.follow_up_question, 300))])
+    lines.extend(["", "<b>Твое объяснение</b>", _h(_clip(item.explanation_text, 1200))])
     if item.agent_provider:
         provider = item.agent_provider
         if item.agent_model:
@@ -769,6 +874,7 @@ def _feature_label(value: str) -> str:
         "quiz_generation": "генерация тестов",
         "topic_inbox_normalize": "идеи тем",
         "mistake_review_analysis": "разбор ошибок",
+        "explain_check_analysis": "проверка объяснений",
     }
     return labels.get(value, value or "unknown")
 

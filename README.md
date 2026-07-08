@@ -37,6 +37,13 @@ mistake review backlog and a first VPS deployment kit.
   manually by the user.
 - Mistake review backlog: after a quiz with wrong answers, the bot can ask an
   agent for a full report and save it into SQLite for later manual work.
+- Explain-check (self-explanation / retrieval practice): pick a topic, explain
+  it by voice or text without looking at the material, and an agent grades the
+  explanation against the topic's material — covered/missing concepts, false
+  vs correct mental models, a 1-4 understanding layer, and a follow-up
+  question. Saved to its own `explanation_checks` table, fully independent
+  from the mistake-work backlog above (different table, different service,
+  different Telegram menu).
 - Optional `git pull --ff-only` before quiz generation, so VPS can refresh
   `interview-review` before reading materials.
 - VPS deployment files: systemd unit, bootstrap script, deploy script, SQLite
@@ -95,6 +102,7 @@ app/core/migrations/
   009_llm_usage_events.sql
   010_mistake_work_items.sql
   011_coding_reps.sql
+  012_explanation_checks.sql
 ```
 
 Apply pending migrations with:
@@ -357,8 +365,9 @@ FFMPEG_BIN=ffmpeg
 
 In Telegram, open `🔁 Повторы` and choose `➕ Добавить повтор`; review tasks use
 button selection by block/topic. Voice input is used only after `🗂 Идеи` ->
-`➕ Добавить тему`. Voice messages outside this flow are ignored with a hint, so
-the bot does not run STT for random audio.
+`➕ Добавить тему`, or after `🗂 Проработка` -> `🗣 Объяснить тему` -> pick a
+topic. Voice messages outside these flows are ignored with a hint, so the bot
+does not run STT for random audio.
 
 For quiz generation on VPS, `interview-review` can be refreshed right before the
 bot reads materials:
@@ -398,6 +407,21 @@ MISTAKE_REVIEW_AGENT_TIMEOUT_SECONDS=180
 
 Use `MISTAKE_REVIEW_AGENT_PROVIDER=fake` when you want to test the flow without
 calling Claude.
+
+Explain-check uses its own agent, independent from mistake review. It receives
+a self-explanation (voice-transcribed or typed text) plus the topic's doc-only
+material (code files excluded, same as quiz generation) and returns a graded
+JSON: which concepts were covered/missing, false-vs-correct mental model pairs,
+a 1-4 understanding-layer score, and one follow-up question. It never writes to
+`interview-review`; saved checks live in their own SQLite table:
+
+```env
+EXPLAIN_CHECK_AGENT_PROVIDER=claude_cli
+EXPLAIN_CHECK_AGENT_MODEL=
+EXPLAIN_CHECK_AGENT_TIMEOUT_SECONDS=180
+```
+
+Use `EXPLAIN_CHECK_AGENT_PROVIDER=fake` for fully local no-LLM testing.
 
 On Windows, if Python cannot find `claude` but PowerShell can, set `CLAUDE_BIN`
 to the full command wrapper path, for example:
@@ -454,7 +478,8 @@ inline submenus:
 
 - `🔁 Повторы`: add a review, schedule, due reviews, cancel a review.
 - `🧪 Тесты`: instant quiz and daily random quiz toggle.
-- `🗂 Проработка`: save future study topics and review saved mistake reports.
+- `🗂 Проработка`: save future study topics, review saved mistake reports, and
+  explain a topic by voice/text for an agent-graded self-explanation check.
 - `⚙️ Настройки`: daily random quiz toggle, coding-reps reminder toggle, local
   LLM usage statistics, changelog.
 
@@ -496,6 +521,11 @@ app/
       models.py
       service.py
     mistake_work/
+      agent.py
+      factory.py
+      models.py
+      service.py
+    explain_check/
       agent.py
       factory.py
       models.py

@@ -8,6 +8,8 @@ from app.adapters.telegram.formatters import (
     format_cancel_review_done,
     format_cancel_review_list,
     format_due_notification,
+    format_explain_check_list,
+    format_explain_check_report,
     format_instant_quiz_report,
     format_llm_usage_report,
     format_mistake_review_preview,
@@ -21,6 +23,7 @@ from app.adapters.telegram.formatters import (
 from app.adapters.telegram.formatters import format_quiz_question, format_quiz_report
 from app.core.repo import RepoTopic
 from app.features.llm_usage.models import LlmFeatureUsage, LlmUsageStats
+from app.features.explain_check.models import ExplanationCheck
 from app.features.mistake_work.agent import MistakeReviewResult
 from app.features.mistake_work.models import MistakeWorkItem
 from app.features.quiz.models import QuizAnswer, QuizQuestion, QuizSession
@@ -355,6 +358,83 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertIn("Индексы PostgreSQL", list_text)
         self.assertIn("Работа над ошибками", item_text)
         self.assertIn("Что добавить/усилить", item_text)
+
+    def test_format_explain_check_list_and_report(self) -> None:
+        item = ExplanationCheck(
+            id="ec1",
+            topic_id="b08",
+            topic_title="Строки в Go",
+            section="Базовый Go",
+            source="voice",
+            explanation_text="Строки в Go неизменяемы, потому что...",
+            status="active",
+            priority="high",
+            layer_reached=2,
+            summary="В целом верно, но путает len с количеством символов.",
+            covered_concepts=["string immutable"],
+            missing_concepts=["rune vs byte в range"],
+            false_models=[
+                {
+                    "false_model": "len(string) считает символы",
+                    "correct_model": "len(string) считает байты UTF-8",
+                }
+            ],
+            follow_up_question="Что выведет len(\"привет\")?",
+            material_fingerprint="fp1",
+            agent_provider="claude_cli_explain_check",
+            agent_model="claude-sonnet-5",
+            prompt_version="learnkeeper-explain-check-v1",
+            created_at=datetime(2026, 7, 8, 11, 0),
+            updated_at=datetime(2026, 7, 8, 11, 0),
+        )
+
+        list_text = format_explain_check_list([item])
+        report_text = format_explain_check_report(item)
+
+        self.assertIn("Мои объяснения", list_text)
+        self.assertIn("Строки в Go", list_text)
+        self.assertIn("Проверка объяснения", report_text)
+        self.assertIn("2/4 — воспроизведение", report_text)
+        self.assertIn("🔴 высокая", report_text)
+        self.assertIn("len(string) считает символы", report_text)
+        self.assertIn("len(string) считает байты UTF-8", report_text)
+        self.assertIn("Что выведет", report_text)
+
+    def test_long_explain_check_report_stays_within_telegram_limit(self) -> None:
+        item = ExplanationCheck(
+            id="ec2",
+            topic_id="db02",
+            topic_title="PostgreSQL: MVCC" * 10,
+            section="Базы данных",
+            source="text",
+            explanation_text="Развернутое объяснение своими словами. " * 200,
+            status="active",
+            priority="normal",
+            layer_reached=3,
+            summary="Развернутая выжимка. " * 60,
+            covered_concepts=[f"концепт {i} с подробным пояснением" for i in range(8)],
+            missing_concepts=[f"пробел {i} с подробным пояснением" for i in range(8)],
+            false_models=[
+                {
+                    "false_model": "ложная модель номер " * 20,
+                    "correct_model": "верная модель номер " * 20,
+                }
+                for _ in range(6)
+            ],
+            follow_up_question="Развернутый вопрос на подумать. " * 40,
+            material_fingerprint="fp2",
+            agent_provider="claude_cli_explain_check",
+            agent_model="claude-sonnet-5",
+            prompt_version="learnkeeper-explain-check-v1",
+            created_at=datetime(2026, 7, 8, 11, 0),
+            updated_at=datetime(2026, 7, 8, 11, 0),
+        )
+
+        report = format_explain_check_report(item)
+        chunks = split_message(report)
+
+        for chunk in chunks:
+            self.assertLessEqual(len(chunk), 4096)
 
     def test_format_quiz_report_with_mistakes(self) -> None:
         session = QuizSession(
