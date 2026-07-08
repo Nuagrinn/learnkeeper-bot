@@ -52,7 +52,7 @@ class TelegramMaterialDocumentTests(unittest.TestCase):
 
         self.assertEqual(raw, result)
 
-    def test_read_material_input_file_marks_markdown_as_utf8(self) -> None:
+    def test_read_material_input_file_keeps_markdown_mimetype_exact(self) -> None:
         raw = "# Слайсы в Go\n".encode("utf-8")
 
         input_file = _read_material_input_file(
@@ -64,7 +64,7 @@ class TelegramMaterialDocumentTests(unittest.TestCase):
         self.assertIsNotNone(input_file)
         assert input_file is not None
         self.assertEqual("b01-review.md", input_file.filename)
-        self.assertEqual("text/markdown; charset=utf-8", input_file.mimetype)
+        self.assertEqual("text/markdown", input_file.mimetype)
         self.assertTrue(input_file.input_file_content.startswith(UTF8_BOM))
 
 

@@ -1260,7 +1260,8 @@ def _read_material_input_file(
     Deliberately does NOT go through TopicMaterial.content: that field comes
     from Path.read_text(), which decodes to str and normalizes newlines
     (CRLF -> LF) along the way. Markdown gets a UTF-8 BOM only in the upload
-    copy so Telegram mobile does not render Cyrillic as Latin-1 mojibake.
+    copy so Telegram mobile does not render Cyrillic as Latin-1 mojibake, while
+    keeping the MIME type exactly text/markdown for the Markdown viewer.
     """
     raw = services.repo.read_material_bytes(source_path)
     if raw is None:
@@ -1268,7 +1269,7 @@ def _read_material_input_file(
     document_bytes = _telegram_material_document_bytes(source_path, raw)
     input_file = InputFile(document_bytes, filename=_read_material_filename(topic_id, source_path))
     if Path(source_path).suffix.lower() in MARKDOWN_MATERIAL_EXTENSIONS:
-        input_file.mimetype = "text/markdown; charset=utf-8"
+        input_file.mimetype = "text/markdown"
     return input_file
 
 
