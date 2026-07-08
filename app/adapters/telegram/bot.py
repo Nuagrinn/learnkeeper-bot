@@ -63,6 +63,7 @@ from app.features.quiz.factory import build_quiz_generator
 from app.features.quiz.generator import QuizGenerationError
 from app.features.quiz.models import QuizQuestion, QuizSession
 from app.features.quiz.service import QuestionClosedError, QuizService
+from app.features.coding_reps.service import CodingRepsService
 from app.features.daily_quiz.service import DailyQuizService
 from app.features.review_tasks.service import ReviewTaskService, TopicNotReadyError
 from app.features.speech.factory import build_speech_to_text
@@ -82,6 +83,9 @@ ABORT_INSTANT_QUIZ = "abort_instant_quiz"
 DAILY_QUIZ_TOGGLE_PREFIX = "daily_quiz_toggle:"
 DAILY_QUIZ_START_PREFIX = "daily_quiz_start:"
 DAILY_QUIZ_SKIP_PREFIX = "daily_quiz_skip:"
+CODING_REPS_TOGGLE_PREFIX = "coding_reps_toggle:"
+CODING_REPS_DONE_PREFIX = "coding_reps_done:"
+CODING_REPS_SKIP_PREFIX = "coding_reps_skip:"
 QUIZ_SIZE_PREFIX = "quiz_size:"
 ABORT_QUIZ_SIZE = "abort_quiz_size"
 MENU_REVIEW = "menu_review"
@@ -98,6 +102,7 @@ MENU_TOPIC_INBOX = "menu_topic_inbox"
 MENU_MISTAKE_WORK = "menu_mistake_work"
 MENU_MISTAKE_WORK_DONE = "menu_mistake_work_done"
 MENU_DAILY_SETTINGS = "menu_daily_settings"
+MENU_CODING_REPS_SETTINGS = "menu_coding_reps_settings"
 MENU_LLM_USAGE = "menu_llm_usage"
 MENU_CHANGELOG = "menu_changelog"
 CANCEL_REVIEW_PREFIX = "cancel_review:"
@@ -128,6 +133,7 @@ BTN_SETTINGS_MENU = "⚙️ Настройки"
 BTN_REVIEW_ADD = "➕ Добавить повтор"
 BTN_INSTANT_QUIZ = "▶️ Пройти тест сейчас"
 BTN_DAILY_QUIZ = "🌅 Ежедневные тесты"
+BTN_CODING_REPS = "🏋️ Кодинг-репы"
 BTN_LLM_USAGE = "📊 Токены LLM"
 BTN_CHANGELOG = "📝 Changelog"
 BTN_REVIEW_CANCEL = "🗑 Удалить повтор"
@@ -145,6 +151,7 @@ LEGACY_MENU_BUTTONS = {
     "Добавить повтор",
     "Пройти тест сейчас",
     "Ежедневные тесты",
+    "Кодинг-репы",
     "Токены LLM",
     "Changelog",
     "Удалить повтор",
@@ -171,6 +178,7 @@ MENU_BUTTONS = {
     BTN_REVIEW_ADD,
     BTN_INSTANT_QUIZ,
     BTN_DAILY_QUIZ,
+    BTN_CODING_REPS,
     BTN_LLM_USAGE,
     BTN_CHANGELOG,
     BTN_REVIEW_CANCEL,
@@ -216,6 +224,7 @@ class AppServices:
         )
         self.review_tasks = ReviewTaskService(self.db, self.repo)
         self.daily_quiz = DailyQuizService(self.db, self.repo)
+        self.coding_reps = CodingRepsService(self.db)
         self.topic_inbox = TopicInboxService(
             self.db,
             build_topic_inbox_agent(settings, usage_recorder=self.llm_usage),
@@ -717,6 +726,7 @@ def _settings_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(BTN_DAILY_QUIZ, callback_data=MENU_DAILY_SETTINGS)],
+            [InlineKeyboardButton(BTN_CODING_REPS, callback_data=MENU_CODING_REPS_SETTINGS)],
             [InlineKeyboardButton(BTN_LLM_USAGE, callback_data=MENU_LLM_USAGE)],
             [InlineKeyboardButton(BTN_CHANGELOG, callback_data=MENU_CHANGELOG)],
         ]
@@ -1112,6 +1122,17 @@ async def _show_daily_quiz_settings(update: Update, context: ContextTypes.DEFAUL
     )
 
 
+async def _show_coding_reps_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    services = _services(context)
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _coding_reps_settings_text(services),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_coding_reps_settings_keyboard(services.coding_reps.is_enabled()),
+    )
+
+
 async def _show_llm_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     services = _services(context)
     if not update.message:
@@ -1196,6 +1217,66 @@ def _daily_quiz_offer_keyboard(topic_id: str, today: str) -> InlineKeyboardMarku
                 InlineKeyboardButton(
                     "Пропустить",
                     callback_data=f"{DAILY_QUIZ_SKIP_PREFIX}{today}",
+                ),
+            ]
+        ]
+    )
+
+
+def _coding_reps_settings_text(services: AppServices) -> str:
+    settings = services.settings
+    enabled = services.coding_reps.is_enabled()
+    status = "включены" if enabled else "выключены"
+    last_sent = services.coding_reps.last_sent_date() or "еще не отправлялся"
+    return "\n".join(
+        [
+            "<b>Кодинг-репы</b>",
+            "",
+            f"<b>Статус:</b> {html.escape(status, quote=False)}",
+            f"<b>Время:</b> <code>{settings.coding_reps_hour:02d}:{settings.coding_reps_minute:02d}</code>",
+            f"<b>Таймзона:</b> <code>{html.escape(settings.daily_quiz_timezone, quote=False)}</code>",
+            f"<b>Последняя отправка:</b> <code>{html.escape(last_sent, quote=False)}</code>",
+            "",
+            "Если режим включен, бот раз в день присылает короткое "
+            "упражнение на 20-30 минут — написать руками, не в боте. "
+            "Бот не пишет и не проверяет код, только напоминает.",
+        ]
+    )
+
+
+def _coding_reps_settings_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    next_value = "false" if enabled else "true"
+    label = "Выключить" if enabled else "Включить"
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=f"{CODING_REPS_TOGGLE_PREFIX}{next_value}")]]
+    )
+
+
+def _coding_rep_offer_text(rep) -> str:
+    return "\n".join(
+        [
+            "<b>Кодинг-реп на сегодня</b>",
+            "",
+            f"<b>{html.escape(rep.title, quote=False)}</b>",
+            "",
+            html.escape(rep.prompt, quote=False),
+            "",
+            "Отметь, когда сделаешь или если сегодня решил пропустить.",
+        ]
+    )
+
+
+def _coding_rep_offer_keyboard(log_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Сделал",
+                    callback_data=f"{CODING_REPS_DONE_PREFIX}{log_id}",
+                ),
+                InlineKeyboardButton(
+                    "Пропустить",
+                    callback_data=f"{CODING_REPS_SKIP_PREFIX}{log_id}",
                 ),
             ]
         ]
@@ -2013,6 +2094,24 @@ async def menu_daily_settings_callback(update: Update, context: ContextTypes.DEF
     )
 
 
+async def menu_coding_reps_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    services = _services(context)
+    await query.answer()
+    await query.edit_message_text(
+        _coding_reps_settings_text(services),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_coding_reps_settings_keyboard(services.coding_reps.is_enabled()),
+    )
+
+
 async def menu_llm_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -2113,6 +2212,79 @@ async def daily_quiz_skip_callback(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text(
         "<b>Ежедневный тест пропущен</b>\n\n"
         f"Дата: <code>{html.escape(today, quote=False)}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def coding_reps_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    raw_value = (query.data or "").removeprefix(CODING_REPS_TOGGLE_PREFIX)
+    enabled = raw_value == "true"
+    services = _services(context)
+    services.coding_reps.set_enabled(enabled)
+    await query.answer("Включено" if enabled else "Выключено")
+    log.info("Coding reps toggled enabled=%s", enabled)
+    await query.edit_message_text(
+        _coding_reps_settings_text(services),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_coding_reps_settings_keyboard(enabled),
+    )
+
+
+async def coding_reps_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    log_id = (query.data or "").removeprefix(CODING_REPS_DONE_PREFIX).strip()
+    services = _services(context)
+    entry = services.coding_reps.get_log_entry(log_id)
+    if not entry:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+
+    services.coding_reps.mark_responded(log_id, "done")
+    await query.answer("Отлично!")
+    await query.edit_message_text(
+        "<b>Кодинг-реп выполнен ✅</b>\n\n"
+        f"{html.escape(entry.rep_title, quote=False)}\n\n"
+        "Записал в журнал.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def coding_reps_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    log_id = (query.data or "").removeprefix(CODING_REPS_SKIP_PREFIX).strip()
+    services = _services(context)
+    entry = services.coding_reps.get_log_entry(log_id)
+    if not entry:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+
+    services.coding_reps.mark_responded(log_id, "skipped")
+    await query.answer("Пропущено")
+    await query.edit_message_text(
+        "<b>Кодинг-реп пропущен</b>\n\n"
+        f"{html.escape(entry.rep_title, quote=False)}",
         parse_mode=ParseMode.HTML,
     )
 
@@ -3029,6 +3201,9 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text in (BTN_DAILY_QUIZ, "Ежедневные тесты"):
         await _show_daily_quiz_settings(update, context)
         return
+    if text in (BTN_CODING_REPS, "Кодинг-репы"):
+        await _show_coding_reps_settings(update, context)
+        return
     if text in (BTN_LLM_USAGE, "Токены LLM"):
         await _show_llm_usage(update, context)
         return
@@ -3125,6 +3300,38 @@ async def send_daily_quiz_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     services.daily_quiz.mark_sent(today)
     log.info("Daily quiz offer sent topic_id=%s date=%s", topic.id, today.isoformat())
+
+
+async def send_coding_rep_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    services = _services(context)
+    owner_id = _owner_id(context)
+    now = datetime.now(_daily_quiz_timezone(services.settings))
+    today = now.date()
+    if not services.coding_reps.should_send_today(today):
+        log.info(
+            "Coding rep reminder skipped enabled=%s last_sent=%s today=%s",
+            services.coding_reps.is_enabled(),
+            services.coding_reps.last_sent_date() or "-",
+            today.isoformat(),
+        )
+        return
+
+    rep = services.coding_reps.random_rep()
+    log_id = services.coding_reps.log_sent(rep)
+
+    try:
+        await context.bot.send_message(
+            chat_id=owner_id,
+            text=_coding_rep_offer_text(rep),
+            reply_markup=_coding_rep_offer_keyboard(log_id),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        log.exception("Failed to send coding rep reminder rep_id=%s", rep.id)
+        return
+
+    services.coding_reps.mark_sent(today)
+    log.info("Coding rep reminder sent rep_id=%s date=%s", rep.id, today.isoformat())
 
 
 async def notify_version_update(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3228,11 +3435,20 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(menu_mistake_work_callback, pattern=f"^{MENU_MISTAKE_WORK}$"))
     app.add_handler(CallbackQueryHandler(menu_mistake_work_done_callback, pattern=f"^{MENU_MISTAKE_WORK_DONE}$"))
     app.add_handler(CallbackQueryHandler(menu_daily_settings_callback, pattern=f"^{MENU_DAILY_SETTINGS}$"))
+    app.add_handler(
+        CallbackQueryHandler(
+            menu_coding_reps_settings_callback,
+            pattern=f"^{MENU_CODING_REPS_SETTINGS}$",
+        )
+    )
     app.add_handler(CallbackQueryHandler(menu_llm_usage_callback, pattern=f"^{MENU_LLM_USAGE}$"))
     app.add_handler(CallbackQueryHandler(menu_changelog_callback, pattern=f"^{MENU_CHANGELOG}$"))
     app.add_handler(CallbackQueryHandler(daily_quiz_toggle_callback, pattern=f"^{DAILY_QUIZ_TOGGLE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_start_callback, pattern=f"^{DAILY_QUIZ_START_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_skip_callback, pattern=f"^{DAILY_QUIZ_SKIP_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(coding_reps_toggle_callback, pattern=f"^{CODING_REPS_TOGGLE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(coding_reps_done_callback, pattern=f"^{CODING_REPS_DONE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(coding_reps_skip_callback, pattern=f"^{CODING_REPS_SKIP_PREFIX}"))
     app.add_handler(CallbackQueryHandler(instant_blocks_callback, pattern=f"^{INSTANT_BLOCKS}$"))
     app.add_handler(CallbackQueryHandler(instant_block_all_callback, pattern=f"^{INSTANT_BLOCK_ALL_PREFIX}"))
     app.add_handler(CallbackQueryHandler(instant_block_callback, pattern=f"^{INSTANT_BLOCK_PREFIX}"))
@@ -3291,6 +3507,15 @@ def build_application(settings: Settings, services: AppServices) -> Application:
                 tzinfo=_daily_quiz_timezone(settings),
             ),
             name="daily-quiz-offer",
+        )
+        app.job_queue.run_daily(
+            send_coding_rep_reminder,
+            time=datetime_time(
+                hour=settings.coding_reps_hour,
+                minute=settings.coding_reps_minute,
+                tzinfo=_daily_quiz_timezone(settings),
+            ),
+            name="coding-rep-reminder",
         )
     return app
 

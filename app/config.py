@@ -41,6 +41,8 @@ class Settings:
     daily_quiz_hour: int
     daily_quiz_minute: int
     daily_quiz_timezone: str
+    coding_reps_hour: int
+    coding_reps_minute: int
     llm_provider: str
     claude_bin: str
     claude_code_oauth_token: str
@@ -123,6 +125,11 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         os.getenv("DAILY_QUIZ_TIMEZONE")
         or env_file.get("DAILY_QUIZ_TIMEZONE", "Europe/Moscow")
     ).strip() or "Europe/Moscow"
+    coding_reps_time = (
+        os.getenv("CODING_REPS_TIME")
+        or env_file.get("CODING_REPS_TIME", "19:30")
+    ).strip()
+    coding_reps_hour, coding_reps_minute = _parse_hhmm(coding_reps_time, default=(19, 30))
     llm_provider = (
         os.getenv("LLM_PROVIDER") or env_file.get("LLM_PROVIDER", "fake")
     ).strip().lower()
@@ -309,6 +316,8 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         daily_quiz_hour=daily_quiz_hour,
         daily_quiz_minute=daily_quiz_minute,
         daily_quiz_timezone=daily_quiz_timezone,
+        coding_reps_hour=coding_reps_hour,
+        coding_reps_minute=coding_reps_minute,
         llm_provider=llm_provider,
         claude_bin=claude_bin,
         claude_code_oauth_token=claude_code_oauth_token,

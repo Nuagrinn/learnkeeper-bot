@@ -21,6 +21,10 @@ mistake review backlog and a first VPS deployment kit.
   sampling before it is worth re-enabling; picking it shows a Telegram alert.
 - Daily random quiz mode: toggle in Telegram, then get one random ready-topic
   test offer every morning.
+- Coding-practice reminders: toggle in Telegram, then get one small deliberate-
+  practice exercise a day (own list, no LLM call). LearnKeeper never writes or
+  checks the code — the owner does the exercise by hand, then marks it done or
+  skipped, which is logged for future progress tracking.
 - Fake quiz generator for local flow testing.
 - Claude CLI quiz generator via subscription OAuth, without Anthropic API key
   fallback when `ALLOW_PAID_API=false`.
@@ -90,6 +94,7 @@ app/core/migrations/
   008_app_settings.sql
   009_llm_usage_events.sql
   010_mistake_work_items.sql
+  011_coding_reps.sql
 ```
 
 Apply pending migrations with:
@@ -227,7 +232,14 @@ REVIEW_TICK_SECONDS=60
 QUIZ_QUESTION_COUNT=5
 DAILY_QUIZ_TIME=10:20
 DAILY_QUIZ_TIMEZONE=Europe/Moscow
+CODING_REPS_TIME=19:30
 ```
+
+Coding-reps reminders reuse `DAILY_QUIZ_TIMEZONE` for their own send time
+(`CODING_REPS_TIME`). Both are off by default; enable in
+`⚙️ Настройки` → `🏋️ Кодинг-репы`. The exercise list lives in
+`app/features/coding_reps/models.py` (`CODING_REPS`) — edit that list directly
+to add, remove, or reword exercises, no migration needed.
 
 For real quiz generation through Claude Code subscription auth, add:
 
@@ -443,7 +455,8 @@ inline submenus:
 - `🔁 Повторы`: add a review, schedule, due reviews, cancel a review.
 - `🧪 Тесты`: instant quiz and daily random quiz toggle.
 - `🗂 Проработка`: save future study topics and review saved mistake reports.
-- `⚙️ Настройки`: daily random quiz toggle and local LLM usage statistics.
+- `⚙️ Настройки`: daily random quiz toggle, coding-reps reminder toggle, local
+  LLM usage statistics, changelog.
 
 Old flat button labels are still accepted as fallback text actions.
 
@@ -490,6 +503,9 @@ app/
     topic_inbox/
       agent.py
       factory.py
+      models.py
+      service.py
+    coding_reps/
       models.py
       service.py
   adapters/
