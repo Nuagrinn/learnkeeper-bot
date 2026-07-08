@@ -1237,19 +1237,25 @@ def _read_material_filename(topic_id: str, source_path: str) -> str:
     return f"{topic_id}-{Path(source_path).name}"
 
 
-def _read_material_input_file(topic_id: str, material) -> InputFile:
-    """Build an InputFile with an explicit UTF-8 charset in its MIME type.
+def _read_material_input_file(
+    services: AppServices, topic_id: str, source_path: str
+) -> InputFile | None:
+    """Build an InputFile from the file's raw bytes on disk, untouched.
 
-    Without this, InputFile only guesses a bare "text/markdown" from the
-    extension (no charset), and Telegram's mobile client has been observed to
-    mis-detect the encoding of Cyrillic-heavy documents sent this way (garbled
-    "mojibake" text), even though the exact same UTF-8 bytes render correctly
-    when attached as a local file from the Telegram Desktop UI.
+    Deliberately does NOT go through TopicMaterial.content: that field comes
+    from Path.read_text(), which decodes to str and normalizes newlines
+    (CRLF -> LF) along the way. Re-encoding that str back to bytes should be
+    lossless for well-formed UTF-8, but empirically the result rendered as
+    mojibake on Telegram mobile, while attaching the same file locally from
+    disk (untouched bytes) rendered fine. Reading raw bytes directly here
+    matches that working path exactly and removes the str round-trip as a
+    variable. Also sets an explicit UTF-8 charset on the MIME type, since a
+    bare "text/markdown" (no charset) is what InputFile guesses by default.
     """
-    input_file = InputFile(
-        material.content.encode("utf-8"),
-        filename=_read_material_filename(topic_id, material.source_path),
-    )
+    raw = services.repo.read_material_bytes(source_path)
+    if raw is None:
+        return None
+    input_file = InputFile(raw, filename=_read_material_filename(topic_id, source_path))
     input_file.mimetype = f"{input_file.mimetype}; charset=utf-8"
     return input_file
 
@@ -3633,22 +3639,26 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
 
     await _sync_materials_repo(context, "read-material-topic")
     materials = services.repo.get_topic_materials(topic)
-    readable_files = [
-        material
+    readable_paths = [
+        material.source_path
         for material in materials.files
         if Path(material.source_path).suffix.lower() not in CODE_FILE_EXTENSIONS
     ]
-    if not readable_files:
+    input_files = [
+        input_file
+        for source_path in readable_paths
+        if (input_file := _read_material_input_file(services, topic.id, source_path)) is not None
+    ]
+    if not input_files:
         await query.edit_message_text(f"Читаемые материалы для темы «{topic.title}» не найдены.")
         return
 
-    log.info("Read material requested topic_id=%s files=%d", topic.id, len(readable_files))
+    log.info("Read material requested topic_id=%s files=%d", topic.id, len(input_files))
     try:
-        if len(readable_files) == 1:
-            material = readable_files[0]
+        if len(input_files) == 1:
             await context.bot.send_document(
                 chat_id=owner_id,
-                document=_read_material_input_file(topic.id, material),
+                document=input_files[0],
                 caption=topic.title,
             )
         else:
@@ -3656,10 +3666,10 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
                 chat_id=owner_id,
                 media=[
                     InputMediaDocument(
-                        media=_read_material_input_file(topic.id, material),
+                        media=input_file,
                         caption=topic.title if position == 0 else None,
                     )
-                    for position, material in enumerate(readable_files)
+                    for position, input_file in enumerate(input_files)
                 ],
             )
     except Exception:

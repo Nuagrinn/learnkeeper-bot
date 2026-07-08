@@ -136,6 +136,24 @@ class RepoServiceTest(unittest.TestCase):
         self.assertEqual("failed", result.status)
         self.assertIn("tracking branch", result.detail)
 
+    def test_read_material_bytes_matches_file_on_disk_exactly(self) -> None:
+        raw = "# Data race в Go\r\nстрока с CRLF\r\n".encode("utf-8")
+        (self.repo / "01-data-race" / "review.md").write_bytes(raw)
+
+        result = RepoService(self.repo).read_material_bytes("01-data-race/review.md")
+
+        self.assertEqual(raw, result)
+
+    def test_read_material_bytes_missing_file_returns_none(self) -> None:
+        result = RepoService(self.repo).read_material_bytes("01-data-race/does-not-exist.md")
+
+        self.assertIsNone(result)
+
+    def test_read_material_bytes_without_repo_path_returns_none(self) -> None:
+        result = RepoService(None).read_material_bytes("01-data-race/review.md")
+
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
