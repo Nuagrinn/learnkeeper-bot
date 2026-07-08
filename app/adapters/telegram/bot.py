@@ -10,7 +10,14 @@ from pathlib import Path
 from time import perf_counter
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+    InputMediaDocument,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -137,6 +144,10 @@ ABORT_EXPLAIN_CHECK = "abort_explain_check"
 EXPLAIN_CHECK_OPEN_PREFIX = "explain_check_open:"
 EXPLAIN_CHECK_DONE_PREFIX = "explain_check_done:"
 EXPLAIN_CHECK_DELETE_PREFIX = "explain_check_delete:"
+READ_MATERIAL_BLOCKS = "read_material_blocks"
+READ_MATERIAL_BLOCK_PREFIX = "read_material_block:"
+READ_MATERIAL_TOPIC_PREFIX = "read_material_topic:"
+ABORT_READ_MATERIAL = "abort_read_material"
 GENERATION_FRAMES = ("⏳", "⌛")
 QUIZ_SIZE_OPTIONS = (5, 10, 20, 30)
 QUIZ_SIZE_REVIEW = "review"
@@ -144,6 +155,7 @@ QUIZ_SIZE_INSTANT_TOPIC = "instant_topic"
 QUIZ_SIZE_INSTANT_BLOCK = "instant_block"
 QUIZ_SIZE_DAILY_TOPIC = "daily_topic"
 BTN_TOPICS = "📚 Темы"
+BTN_READ_MATERIAL = "📖 Читать материал"
 BTN_REVIEW_MENU = "🔁 Повторы"
 BTN_TEST_MENU = "🧪 Тесты"
 BTN_IDEAS_MENU = "🗂 Проработка"
@@ -197,6 +209,7 @@ LEGACY_MENU_BUTTONS = {
 }
 MENU_BUTTONS = {
     BTN_TOPICS,
+    BTN_READ_MATERIAL,
     BTN_REVIEW_MENU,
     BTN_TEST_MENU,
     BTN_IDEAS_MENU,
@@ -476,9 +489,10 @@ def _format_version_update_text() -> str:
 def _main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [BTN_TOPICS, BTN_REVIEW_MENU],
-            [BTN_TEST_MENU, BTN_IDEAS_MENU],
-            [BTN_SETTINGS_MENU, BTN_HELP],
+            [BTN_TOPICS, BTN_READ_MATERIAL],
+            [BTN_REVIEW_MENU, BTN_TEST_MENU],
+            [BTN_IDEAS_MENU, BTN_SETTINGS_MENU],
+            [BTN_HELP],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -568,6 +582,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>LearnKeeper на связи</b>\n\n"
         "Основные действия собраны в разделы снизу.\n\n"
         f"<b>{BTN_TOPICS}</b> - список тем из interview-review\n"
+        f"<b>{BTN_READ_MATERIAL}</b> - прислать материал темы файлом (Telegram сам красиво его отрендерит)\n"
         f"<b>{BTN_REVIEW_MENU}</b> - добавить, посмотреть или отменить повторы\n"
         f"<b>{BTN_TEST_MENU}</b> - моментальные и ежедневные тесты\n"
         f"<b>{BTN_IDEAS_MENU}</b> - идеи тем, отчеты по ошибкам, объяснить тему своими словами\n"
@@ -1169,6 +1184,59 @@ def _explain_check_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _read_material_blocks_text(grouped: dict[str, list]) -> str:
+    total = sum(len(topics) for topics in grouped.values())
+    return (
+        "<b>Читать материал</b>\n\n"
+        f"Готовых тем: <b>{total}</b>\n"
+        "Выбери блок."
+    )
+
+
+def _read_material_topics_text(section: str, topics: list) -> str:
+    return (
+        "<b>Читать материал</b>\n\n"
+        f"<b>{html.escape(section, quote=False)}</b>\n"
+        f"Тем: <b>{len(topics)}</b>\n\n"
+        "Выбери тему."
+    )
+
+
+def _read_material_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, (section, topics) in enumerate(grouped.items()):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{section} ({len(topics)})"),
+                    callback_data=f"{READ_MATERIAL_BLOCK_PREFIX}{index}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_READ_MATERIAL)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _read_material_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for topic in topics:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{topic.id} · {topic.title}"),
+                    callback_data=f"{READ_MATERIAL_TOPIC_PREFIX}{topic.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("К блокам", callback_data=READ_MATERIAL_BLOCKS)])
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_READ_MATERIAL)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _read_material_filename(topic_id: str, source_path: str) -> str:
+    return f"{topic_id}-{Path(source_path).name}"
+
+
 def _explain_check_prompt_text(topic_title: str) -> str:
     return (
         "<b>Расскажи своими словами</b>\n\n"
@@ -1277,6 +1345,25 @@ async def _show_explain_check_blocks(update: Update, context: ContextTypes.DEFAU
         _explain_check_blocks_text(grouped),
         parse_mode=ParseMode.HTML,
         reply_markup=_explain_check_block_keyboard(grouped),
+    )
+
+
+async def _show_read_material_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "read-material-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await _answer_long(
+            update,
+            "<b>Читать материал</b>\n\n"
+            "В interview-review пока нет ready-тем с читаемыми материалами.",
+        )
+        return
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _read_material_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_read_material_block_keyboard(grouped),
     )
 
 
@@ -3453,6 +3540,131 @@ async def abort_explain_check_callback(update: Update, context: ContextTypes.DEF
     await query.edit_message_text("Проверка объяснения отменена.")
 
 
+async def read_material_blocks_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await _sync_materials_repo(context, "read-material-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await query.edit_message_text(
+            "<b>Читать материал</b>\n\n"
+            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await query.edit_message_text(
+        _read_material_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_read_material_block_keyboard(grouped),
+    )
+
+
+async def read_material_block_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    raw_index = (query.data or "").removeprefix(READ_MATERIAL_BLOCK_PREFIX)
+    try:
+        index = int(raw_index)
+    except ValueError:
+        await query.edit_message_text("Не понял выбранный блок. Нажми «Читать материал» еще раз.")
+        return
+
+    grouped = _ready_review_topics_by_section(_services(context))
+    sections = list(grouped.items())
+    if index < 0 or index >= len(sections):
+        await query.edit_message_text("Список блоков устарел. Нажми «Читать материал» еще раз.")
+        return
+
+    section, topics = sections[index]
+    await query.edit_message_text(
+        _read_material_topics_text(section, topics),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_read_material_topic_keyboard(topics),
+    )
+
+
+async def read_material_topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    services = _services(context)
+    topic_id = (query.data or "").removeprefix(READ_MATERIAL_TOPIC_PREFIX).strip().lower()
+    topic = services.repo.get_topic(topic_id)
+    if not topic:
+        await query.edit_message_text("Тема не найдена. Нажми «Читать материал» еще раз.")
+        return
+
+    await _sync_materials_repo(context, "read-material-topic")
+    materials = services.repo.get_topic_materials(topic)
+    if not materials.files:
+        await query.edit_message_text(f"Материалы для темы «{topic.title}» не найдены.")
+        return
+
+    log.info("Read material requested topic_id=%s files=%d", topic.id, len(materials.files))
+    try:
+        if len(materials.files) == 1:
+            material = materials.files[0]
+            await context.bot.send_document(
+                chat_id=owner_id,
+                document=InputFile(
+                    material.content.encode("utf-8"),
+                    filename=_read_material_filename(topic.id, material.source_path),
+                ),
+                caption=topic.title,
+            )
+        else:
+            await context.bot.send_media_group(
+                chat_id=owner_id,
+                media=[
+                    InputMediaDocument(
+                        media=material.content.encode("utf-8"),
+                        filename=_read_material_filename(topic.id, material.source_path),
+                        caption=topic.title if position == 0 else None,
+                    )
+                    for position, material in enumerate(materials.files)
+                ],
+            )
+    except Exception:
+        log.exception("Failed to send material document(s) for topic_id=%s", topic.id)
+        await query.edit_message_text("Не получилось отправить файл(ы). Попробуй еще раз чуть позже.")
+        return
+
+    await query.edit_message_text(f"Материал «{topic.title}» отправлен ниже.")
+
+
+async def abort_read_material_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer("Ок")
+    await query.edit_message_text("Чтение материала отменено.")
+
+
 async def reset_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -3914,6 +4126,9 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text in (BTN_TOPICS, "Темы"):
         await _show_topics(update, context)
         return
+    if text == BTN_READ_MATERIAL:
+        await _show_read_material_blocks(update, context)
+        return
     if text == BTN_REVIEW_MENU:
         await _show_review_menu(update, context)
         return
@@ -4183,6 +4398,10 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(explain_check_block_callback, pattern=f"^{EXPLAIN_CHECK_BLOCK_PREFIX}"))
     app.add_handler(CallbackQueryHandler(explain_check_topic_callback, pattern=f"^{EXPLAIN_CHECK_TOPIC_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_explain_check_callback, pattern=f"^{ABORT_EXPLAIN_CHECK}$"))
+    app.add_handler(CallbackQueryHandler(read_material_blocks_callback, pattern=f"^{READ_MATERIAL_BLOCKS}$"))
+    app.add_handler(CallbackQueryHandler(read_material_block_callback, pattern=f"^{READ_MATERIAL_BLOCK_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(read_material_topic_callback, pattern=f"^{READ_MATERIAL_TOPIC_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(abort_read_material_callback, pattern=f"^{ABORT_READ_MATERIAL}$"))
     app.add_handler(CallbackQueryHandler(menu_schedule_callback, pattern=f"^{MENU_SCHEDULE}$"))
     app.add_handler(CallbackQueryHandler(menu_due_callback, pattern=f"^{MENU_DUE}$"))
     app.add_handler(CallbackQueryHandler(menu_cancel_reviews_callback, pattern=f"^{MENU_CANCEL_REVIEWS}$"))
