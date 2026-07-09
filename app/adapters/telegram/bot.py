@@ -1273,6 +1273,13 @@ def _review_explain_choice_text(topic_title: str) -> str:
     )
 
 
+def _postpone_cancel_row(task_id: str) -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton("Отложить", callback_data=f"{POSTPONE_DUE_PREFIX}{task_id}"),
+        InlineKeyboardButton("Отменить", callback_data=f"{CANCEL_REVIEW_PREFIX}{task_id}"),
+    ]
+
+
 def _review_explain_choice_keyboard(task_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -1288,6 +1295,7 @@ def _review_explain_choice_keyboard(task_id: str) -> InlineKeyboardMarkup:
                     callback_data=f"{SKIP_EXPLAIN_REVIEW_PREFIX}{task_id}",
                 )
             ],
+            _postpone_cancel_row(task_id),
         ]
     )
 
@@ -1307,7 +1315,8 @@ def _review_ready_after_explain_keyboard(task_id: str) -> InlineKeyboardMarkup:
                     "▶️ Начать тест",
                     callback_data=f"{SKIP_EXPLAIN_REVIEW_PREFIX}{task_id}",
                 )
-            ]
+            ],
+            _postpone_cancel_row(task_id),
         ]
     )
 
@@ -4490,16 +4499,7 @@ async def notify_due_reviews(context: ContextTypes.DEFAULT_TYPE) -> None:
         keyboard = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("Начать тест", callback_data=f"{START_REVIEW_PREFIX}{task.id}")],
-                [
-                    InlineKeyboardButton(
-                        "Отложить",
-                        callback_data=f"{POSTPONE_DUE_PREFIX}{task.id}",
-                    ),
-                    InlineKeyboardButton(
-                        "Отменить",
-                        callback_data=f"{CANCEL_REVIEW_PREFIX}{task.id}",
-                    ),
-                ],
+                _postpone_cancel_row(task.id),
             ]
         )
         try:
