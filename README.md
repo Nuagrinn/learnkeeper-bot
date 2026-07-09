@@ -253,6 +253,30 @@ DAILY_QUIZ_TIMEZONE=Europe/Moscow
 CODING_REPS_TIME=19:30
 ```
 
+### Markdown material MTProto probe
+
+Telegram Bot API `sendDocument` may upload `.md` files without preserving
+`text/markdown` MIME metadata, and Telegram iOS can then open the file as plain
+text instead of its native markdown reader. To test the alternative MTProto
+upload path, create an app at <https://my.telegram.org> and add:
+
+```env
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_MTPROTO_SESSION=data/telegram-mtproto
+```
+
+Then send one material file through MTProto:
+
+```powershell
+.venv\bin\python.exe -m app.cli material-mtproto-probe b01
+```
+
+The command uses the bot token, sends the first `.md` source for the topic, and
+prints the MIME stored on the returned Telegram document. If Telegram iOS renders
+that message as a rich markdown document, the same sender can replace the
+current "Читать материал" document path.
+
 Coding-reps reminders reuse `DAILY_QUIZ_TIMEZONE` for their own send time
 (`CODING_REPS_TIME`). Both are off by default; enable in
 `⚙️ Настройки` → `🏋️ Кодинг-репы`. The exercise list lives in

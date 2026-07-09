@@ -36,6 +36,9 @@ class Settings:
     interview_review_path: Path | None
     telegram_bot_token: str
     tg_user_id: int | None
+    telegram_api_id: int | None
+    telegram_api_hash: str
+    telegram_mtproto_session: Path
     review_tick_seconds: int
     quiz_question_count: int
     daily_quiz_hour: int
@@ -106,6 +109,19 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
     raw_token = os.getenv("TELEGRAM_BOT_TOKEN") or env_file.get("TELEGRAM_BOT_TOKEN", "")
     raw_user_id = os.getenv("TG_USER_ID") or env_file.get("TG_USER_ID", "")
     tg_user_id = int(raw_user_id) if raw_user_id.isdigit() else None
+    raw_api_id = os.getenv("TELEGRAM_API_ID") or env_file.get("TELEGRAM_API_ID", "")
+    telegram_api_id = int(raw_api_id) if raw_api_id.isdigit() else None
+    telegram_api_hash = (
+        os.getenv("TELEGRAM_API_HASH") or env_file.get("TELEGRAM_API_HASH", "")
+    ).strip()
+    raw_mtproto_session = (
+        os.getenv("TELEGRAM_MTPROTO_SESSION")
+        or env_file.get("TELEGRAM_MTPROTO_SESSION", "")
+    )
+    telegram_mtproto_session = _resolve_path(
+        raw_mtproto_session,
+        default=PROJECT_ROOT / "data" / "telegram-mtproto",
+    )
     raw_tick = os.getenv("REVIEW_TICK_SECONDS") or env_file.get("REVIEW_TICK_SECONDS", "60")
     try:
         review_tick_seconds = max(10, int(raw_tick))
@@ -331,6 +347,9 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         interview_review_path=interview_review_path,
         telegram_bot_token=raw_token.strip(),
         tg_user_id=tg_user_id,
+        telegram_api_id=telegram_api_id,
+        telegram_api_hash=telegram_api_hash,
+        telegram_mtproto_session=telegram_mtproto_session,
         review_tick_seconds=review_tick_seconds,
         quiz_question_count=quiz_question_count,
         daily_quiz_hour=daily_quiz_hour,
