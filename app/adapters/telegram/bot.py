@@ -73,6 +73,7 @@ from app.features.quiz.generator import CODE_FILE_EXTENSIONS, MATERIAL_CHAR_LIMI
 from app.features.quiz.models import QuizQuestion, QuizSession
 from app.features.quiz.service import QuestionClosedError, QuizService
 from app.features.coding_reps.service import CodingRepsService
+from app.features.daily_quiz.models import DONE, PENDING, POSTPONED, SKIPPED, STARTED
 from app.features.daily_quiz.service import DailyQuizService
 from app.features.explain_check.agent import ExplainCheckAgentError, ExplainCheckInput
 from app.features.explain_check.factory import build_explain_check_agent
@@ -97,6 +98,10 @@ ABORT_INSTANT_QUIZ = "abort_instant_quiz"
 DAILY_QUIZ_TOGGLE_PREFIX = "daily_quiz_toggle:"
 DAILY_QUIZ_START_PREFIX = "daily_quiz_start:"
 DAILY_QUIZ_SKIP_PREFIX = "daily_quiz_skip:"
+DAILY_QUIZ_POSTPONE_PREFIX = "daily_quiz_postpone:"
+DAILY_QUIZ_DONE_PREFIX = "daily_quiz_done:"
+DAILY_QUIZ_OPEN_PREFIX = "daily_quiz_open:"
+MENU_DAILY_QUIZ_OUTSTANDING = "menu_daily_quiz_outstanding"
 CODING_REPS_TOGGLE_PREFIX = "coding_reps_toggle:"
 CODING_REPS_DONE_PREFIX = "coding_reps_done:"
 CODING_REPS_SKIP_PREFIX = "coding_reps_skip:"
@@ -1457,7 +1462,10 @@ async def _show_daily_quiz_settings(update: Update, context: ContextTypes.DEFAUL
     await update.message.reply_text(
         _daily_quiz_settings_text(services, context),
         parse_mode=ParseMode.HTML,
-        reply_markup=_daily_quiz_settings_keyboard(services.daily_quiz.is_enabled()),
+        reply_markup=_daily_quiz_settings_keyboard(
+            services.daily_quiz.is_enabled(),
+            len(services.daily_quiz.list_outstanding()),
+        ),
     )
 
 
@@ -1504,6 +1512,7 @@ def _daily_quiz_settings_text(
     enabled = services.daily_quiz.is_enabled()
     status = "включены" if enabled else "выключены"
     ready_count = len(services.daily_quiz.ready_topics())
+    outstanding_count = len(services.daily_quiz.list_outstanding())
     last_sent = services.daily_quiz.last_sent_date() or "еще не отправлялся"
     return "\n".join(
         [
@@ -1513,18 +1522,27 @@ def _daily_quiz_settings_text(
             f"<b>Время:</b> <code>{settings.daily_quiz_hour:02d}:{settings.daily_quiz_minute:02d}</code>",
             f"<b>Таймзона:</b> <code>{html.escape(settings.daily_quiz_timezone, quote=False)}</code>",
             f"<b>Готовых тем:</b> {ready_count}",
+            f"<b>Незавершено:</b> {outstanding_count}",
             f"<b>Последняя отправка:</b> <code>{html.escape(last_sent, quote=False)}</code>",
             "",
-            "Если режим включен, утром бот пришлет случайную ready-тему с кнопками: пройти тест или пропустить.",
+            "Если режим включен, утром бот пришлет случайную ready-тему с кнопками: "
+            "пройти тест, отложить или пропустить. Отложенные и начатые тесты не "
+            "теряются — их можно найти в «Незавершенные тесты» ниже.",
         ]
     )
 
 
-def _daily_quiz_settings_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+def _daily_quiz_settings_keyboard(enabled: bool, outstanding_count: int) -> InlineKeyboardMarkup:
     next_value = "false" if enabled else "true"
     label = "Выключить" if enabled else "Включить"
+    outstanding_label = "📋 Незавершенные тесты"
+    if outstanding_count:
+        outstanding_label = f"{outstanding_label} ({outstanding_count})"
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"{DAILY_QUIZ_TOGGLE_PREFIX}{next_value}")]]
+        [
+            [InlineKeyboardButton(label, callback_data=f"{DAILY_QUIZ_TOGGLE_PREFIX}{next_value}")],
+            [InlineKeyboardButton(outstanding_label, callback_data=MENU_DAILY_QUIZ_OUTSTANDING)],
+        ]
     )
 
 
@@ -1539,27 +1557,97 @@ def _daily_quiz_offer_text(topic) -> str:
     lines.extend(
         [
             "",
-            "Можно пройти сейчас или пропустить сегодня.",
+            "Можно пройти сейчас, отложить на потом или пропустить сегодня.",
         ]
     )
     return "\n".join(lines)
 
 
-def _daily_quiz_offer_keyboard(topic_id: str, today: str) -> InlineKeyboardMarkup:
+def _daily_quiz_offer_keyboard(offer_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    "Пройти",
-                    callback_data=f"{DAILY_QUIZ_START_PREFIX}{topic_id}",
-                ),
-                InlineKeyboardButton(
-                    "Пропустить",
-                    callback_data=f"{DAILY_QUIZ_SKIP_PREFIX}{today}",
-                ),
-            ]
+                InlineKeyboardButton("Пройти", callback_data=f"{DAILY_QUIZ_START_PREFIX}{offer_id}"),
+                InlineKeyboardButton("Отложить", callback_data=f"{DAILY_QUIZ_POSTPONE_PREFIX}{offer_id}"),
+            ],
+            [InlineKeyboardButton("Пропустить", callback_data=f"{DAILY_QUIZ_SKIP_PREFIX}{offer_id}")],
         ]
     )
+
+
+_DAILY_QUIZ_STATUS_LABELS = {
+    PENDING: "новый",
+    STARTED: "начат, не завершен",
+    POSTPONED: "отложен",
+    SKIPPED: "пропущен",
+    DONE: "пройден",
+}
+
+
+def _daily_quiz_offer_detail_text(offer) -> str:
+    lines = [
+        "<b>Ежедневный тест</b>",
+        "",
+        f"<b>Тема:</b> {html.escape(offer.topic_title, quote=False)}",
+    ]
+    if offer.section:
+        lines.append(f"<b>Блок:</b> {html.escape(offer.section, quote=False)}")
+    lines.extend(
+        [
+            f"<b>Дата:</b> <code>{html.escape(offer.offer_date, quote=False)}</code>",
+            f"<b>Статус:</b> {_DAILY_QUIZ_STATUS_LABELS.get(offer.status, offer.status)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _daily_quiz_offer_detail_keyboard(offer_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Пройти", callback_data=f"{DAILY_QUIZ_START_PREFIX}{offer_id}"),
+                InlineKeyboardButton("Отложить", callback_data=f"{DAILY_QUIZ_POSTPONE_PREFIX}{offer_id}"),
+            ],
+            [
+                InlineKeyboardButton("Готово", callback_data=f"{DAILY_QUIZ_DONE_PREFIX}{offer_id}"),
+                InlineKeyboardButton("Пропустить", callback_data=f"{DAILY_QUIZ_SKIP_PREFIX}{offer_id}"),
+            ],
+            [InlineKeyboardButton("К списку", callback_data=MENU_DAILY_QUIZ_OUTSTANDING)],
+        ]
+    )
+
+
+def _daily_quiz_outstanding_text(offers: list) -> str:
+    if not offers:
+        return "<b>Незавершенные ежедневные тесты</b>\n\nПусто — все разобрано."
+    return "\n".join(
+        [
+            "<b>Незавершенные ежедневные тесты</b>",
+            "",
+            f"Всего: <b>{len(offers)}</b>",
+            "",
+            "Выбери, чтобы открыть.",
+        ]
+    )
+
+
+_DAILY_QUIZ_STATUS_ICONS = {PENDING: "🆕", STARTED: "▶️", POSTPONED: "⏸"}
+
+
+def _daily_quiz_outstanding_keyboard(offers: list) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for offer in offers:
+        icon = _DAILY_QUIZ_STATUS_ICONS.get(offer.status, "•")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{icon} {offer.offer_date} · {offer.topic_title}"),
+                    callback_data=f"{DAILY_QUIZ_OPEN_PREFIX}{offer.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("К настройкам", callback_data=MENU_DAILY_SETTINGS)])
+    return InlineKeyboardMarkup(rows)
 
 
 def _coding_reps_settings_text(services: AppServices) -> str:
@@ -2553,7 +2641,10 @@ async def menu_daily_settings_callback(update: Update, context: ContextTypes.DEF
     await query.edit_message_text(
         _daily_quiz_settings_text(services, context),
         parse_mode=ParseMode.HTML,
-        reply_markup=_daily_quiz_settings_keyboard(services.daily_quiz.is_enabled()),
+        reply_markup=_daily_quiz_settings_keyboard(
+            services.daily_quiz.is_enabled(),
+            len(services.daily_quiz.list_outstanding()),
+        ),
     )
 
 
@@ -2631,7 +2722,10 @@ async def daily_quiz_toggle_callback(update: Update, context: ContextTypes.DEFAU
     await query.edit_message_text(
         _daily_quiz_settings_text(services, context),
         parse_mode=ParseMode.HTML,
-        reply_markup=_daily_quiz_settings_keyboard(enabled),
+        reply_markup=_daily_quiz_settings_keyboard(
+            enabled,
+            len(services.daily_quiz.list_outstanding()),
+        ),
     )
 
 
@@ -2646,8 +2740,16 @@ async def daily_quiz_start_callback(update: Update, context: ContextTypes.DEFAUL
 
     await query.answer()
     services = _services(context)
-    topic_id = (query.data or "").removeprefix(DAILY_QUIZ_START_PREFIX).strip().lower()
-    topic = services.repo.get_topic(topic_id)
+    payload = (query.data or "").removeprefix(DAILY_QUIZ_START_PREFIX).strip()
+    offer = services.daily_quiz.get_offer(payload)
+    if offer:
+        topic = services.repo.get_topic(offer.topic_id)
+        if topic:
+            services.daily_quiz.set_status(offer.id, STARTED)
+    else:
+        # Pre-migration offer message: payload is a bare topic_id, no DB row.
+        topic = services.repo.get_topic(payload.lower())
+
     if not topic:
         await query.edit_message_text("Тема ежедневного теста уже не найдена. Завтра выберу новую.")
         return
@@ -2670,12 +2772,118 @@ async def daily_quiz_skip_callback(update: Update, context: ContextTypes.DEFAULT
         await query.answer("Это личный бот LearnKeeper.", show_alert=True)
         return
 
-    today = (query.data or "").removeprefix(DAILY_QUIZ_SKIP_PREFIX).strip()
+    services = _services(context)
+    payload = (query.data or "").removeprefix(DAILY_QUIZ_SKIP_PREFIX).strip()
+    offer = services.daily_quiz.get_offer(payload)
     await query.answer("Пропущено")
+    if offer:
+        services.daily_quiz.set_status(offer.id, SKIPPED)
+        await query.edit_message_text(
+            "<b>Ежедневный тест пропущен</b>\n\n"
+            f"{html.escape(offer.topic_title, quote=False)}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Pre-migration offer message: payload is a bare date string, no DB row.
     await query.edit_message_text(
         "<b>Ежедневный тест пропущен</b>\n\n"
-        f"Дата: <code>{html.escape(today, quote=False)}</code>",
+        f"Дата: <code>{html.escape(payload, quote=False)}</code>",
         parse_mode=ParseMode.HTML,
+    )
+
+
+async def daily_quiz_postpone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    services = _services(context)
+    offer_id = (query.data or "").removeprefix(DAILY_QUIZ_POSTPONE_PREFIX).strip()
+    offer = services.daily_quiz.get_offer(offer_id)
+    if not offer:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+
+    services.daily_quiz.set_status(offer.id, POSTPONED)
+    await query.answer("Отложено")
+    await query.edit_message_text(
+        "<b>Отложено</b>\n\n"
+        f"{html.escape(offer.topic_title, quote=False)}\n\n"
+        "Найдешь в «🌅 Ежедневные тесты» → «📋 Незавершенные тесты».",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def daily_quiz_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    services = _services(context)
+    offer_id = (query.data or "").removeprefix(DAILY_QUIZ_DONE_PREFIX).strip()
+    offer = services.daily_quiz.get_offer(offer_id)
+    if not offer:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+
+    services.daily_quiz.set_status(offer.id, DONE)
+    await query.answer("Отмечено")
+    await query.edit_message_text(
+        "<b>Ежедневный тест пройден ✅</b>\n\n"
+        f"{html.escape(offer.topic_title, quote=False)}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def daily_quiz_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    services = _services(context)
+    offer_id = (query.data or "").removeprefix(DAILY_QUIZ_OPEN_PREFIX).strip()
+    offer = services.daily_quiz.get_offer(offer_id)
+    if not offer:
+        await query.answer("Запись не найдена.", show_alert=True)
+        return
+
+    await query.answer()
+    await query.edit_message_text(
+        _daily_quiz_offer_detail_text(offer),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_daily_quiz_offer_detail_keyboard(offer.id),
+    )
+
+
+async def menu_daily_quiz_outstanding_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    services = _services(context)
+    offers = services.daily_quiz.list_outstanding()
+    await query.edit_message_text(
+        _daily_quiz_outstanding_text(offers),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_daily_quiz_outstanding_keyboard(offers),
     )
 
 
@@ -4253,11 +4461,12 @@ async def send_daily_quiz_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.warning("Daily quiz enabled, but no ready topics with materials found")
         return
 
+    offer = services.daily_quiz.create_offer(topic, today)
     try:
         await context.bot.send_message(
             chat_id=owner_id,
             text=_daily_quiz_offer_text(topic),
-            reply_markup=_daily_quiz_offer_keyboard(topic.id, today.isoformat()),
+            reply_markup=_daily_quiz_offer_keyboard(offer.id),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
@@ -4265,7 +4474,12 @@ async def send_daily_quiz_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     services.daily_quiz.mark_sent(today)
-    log.info("Daily quiz offer sent topic_id=%s date=%s", topic.id, today.isoformat())
+    log.info(
+        "Daily quiz offer sent topic_id=%s offer_id=%s date=%s",
+        topic.id,
+        offer.id,
+        today.isoformat(),
+    )
 
 
 async def send_coding_rep_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4423,6 +4637,15 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(daily_quiz_toggle_callback, pattern=f"^{DAILY_QUIZ_TOGGLE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_start_callback, pattern=f"^{DAILY_QUIZ_START_PREFIX}"))
     app.add_handler(CallbackQueryHandler(daily_quiz_skip_callback, pattern=f"^{DAILY_QUIZ_SKIP_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(daily_quiz_postpone_callback, pattern=f"^{DAILY_QUIZ_POSTPONE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(daily_quiz_done_callback, pattern=f"^{DAILY_QUIZ_DONE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(daily_quiz_open_callback, pattern=f"^{DAILY_QUIZ_OPEN_PREFIX}"))
+    app.add_handler(
+        CallbackQueryHandler(
+            menu_daily_quiz_outstanding_callback,
+            pattern=f"^{MENU_DAILY_QUIZ_OUTSTANDING}$",
+        )
+    )
     app.add_handler(CallbackQueryHandler(coding_reps_toggle_callback, pattern=f"^{CODING_REPS_TOGGLE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(coding_reps_done_callback, pattern=f"^{CODING_REPS_DONE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(coding_reps_skip_callback, pattern=f"^{CODING_REPS_SKIP_PREFIX}"))

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import random
+import uuid
 from datetime import date, datetime
 
 from app.core.db import Database
 from app.core.repo import RepoService, RepoTopic
+from app.features.daily_quiz.models import (
+    OUTSTANDING_STATUSES,
+    PENDING,
+    DailyQuizOffer,
+    daily_quiz_offer_from_row,
+)
 
 
 DAILY_QUIZ_ENABLED = "daily_quiz_enabled"
@@ -47,6 +54,77 @@ class DailyQuizService:
         if not topics:
             return None
         return random.choice(topics)
+
+    def create_offer(
+        self,
+        topic: RepoTopic,
+        today: date,
+        *,
+        now: datetime | None = None,
+    ) -> DailyQuizOffer:
+        created = (now or datetime.now()).replace(microsecond=0)
+        offer_id = uuid.uuid4().hex[:12]
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_quiz_offers
+                    (id, offer_date, topic_id, topic_title, section, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    offer_id,
+                    today.isoformat(),
+                    topic.id,
+                    topic.title,
+                    topic.section,
+                    PENDING,
+                    created.isoformat(timespec="seconds"),
+                    created.isoformat(timespec="seconds"),
+                ),
+            )
+        offer = self.get_offer(offer_id)
+        assert offer is not None
+        return offer
+
+    def get_offer(self, offer_id: str) -> DailyQuizOffer | None:
+        clean_id = offer_id.strip()
+        if not clean_id:
+            return None
+        with self.db.session() as conn:
+            row = conn.execute(
+                "SELECT * FROM daily_quiz_offers WHERE id = ?",
+                (clean_id,),
+            ).fetchone()
+        return daily_quiz_offer_from_row(row) if row else None
+
+    def set_status(
+        self,
+        offer_id: str,
+        status: str,
+        *,
+        now: datetime | None = None,
+    ) -> DailyQuizOffer | None:
+        updated = (now or datetime.now()).replace(microsecond=0)
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE daily_quiz_offers SET status = ?, updated_at = ? WHERE id = ?",
+                (status, updated.isoformat(timespec="seconds"), offer_id),
+            )
+        return self.get_offer(offer_id)
+
+    def list_outstanding(self, *, limit: int = 10) -> list[DailyQuizOffer]:
+        placeholders = ",".join("?" for _ in OUTSTANDING_STATUSES)
+        with self.db.session() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM daily_quiz_offers
+                WHERE status IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (*OUTSTANDING_STATUSES, max(1, min(50, int(limit)))),
+            ).fetchall()
+        return [daily_quiz_offer_from_row(row) for row in rows]
 
     def _get(self, key: str, default: str) -> str:
         with self.db.session() as conn:
