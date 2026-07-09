@@ -87,6 +87,7 @@ from app.features.topic_inbox.service import TopicInboxService
 
 log = logging.getLogger(__name__)
 START_REVIEW_PREFIX = "start_review:"
+POSTPONE_DUE_PREFIX = "postpone_due:"
 EXPLAIN_THEN_REVIEW_PREFIX = "explain_then_review:"
 SKIP_EXPLAIN_REVIEW_PREFIX = "skip_explain_review:"
 QUIZ_ANSWER_PREFIX = "quiz_answer:"
@@ -1871,13 +1872,20 @@ async def _show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _show_due(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tasks = _services(context).review_tasks.due_tasks(now=datetime.now(), limit=20)
-    await _answer_long(
-        update,
-        format_tasks(
-            tasks,
-            empty_text="Сейчас нет задач, которые пора повторять.",
-            title="Пора повторять",
-        ),
+    text = format_tasks(
+        tasks,
+        empty_text="Сейчас нет задач, которые пора повторять.",
+        title="Пора повторять",
+    )
+    if not tasks:
+        await _answer_long(update, text)
+        return
+    if not update.message:
+        return
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=_due_tasks_keyboard(tasks),
     )
 
 
@@ -2016,6 +2024,24 @@ def _cancel_review_keyboard(tasks) -> InlineKeyboardMarkup:
             ]
         )
     rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_CANCEL_REVIEW)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _due_tasks_keyboard(tasks) -> InlineKeyboardMarkup:
+    """One "Начать" button per due task - reuses START_REVIEW_PREFIX, the same
+    entry point as the due-notification message, so a postponed/ignored task
+    is not just visible here but actually actionable."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for task in tasks:
+        label = f"{task.due_at:%d-%m-%Y} · {task.stage}/3 · {task.topic_title}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(label),
+                    callback_data=f"{START_REVIEW_PREFIX}{task.id}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(rows)
 
 
@@ -2323,6 +2349,7 @@ async def menu_due_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             title="Пора повторять",
         ),
         parse_mode=ParseMode.HTML,
+        reply_markup=_due_tasks_keyboard(tasks) if tasks else None,
     )
 
 
@@ -3075,6 +3102,42 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         _review_explain_choice_text(task.topic_title),
         parse_mode=ParseMode.HTML,
         reply_markup=_review_explain_choice_keyboard(task.id),
+    )
+
+
+async def postpone_due_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Dismiss a due-notification message without touching the task itself.
+
+    The task stays "active" with its due_at in the past, so it keeps showing
+    up in due_tasks() ("Пора повторять") and gets re-notified tomorrow
+    (due_for_notification() only suppresses same-day repeats) - postponing
+    needs no new state, just acknowledging that this particular message is
+    handled.
+    """
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    task_id = (query.data or "").removeprefix(POSTPONE_DUE_PREFIX)
+    services = _services(context)
+    try:
+        task = services.review_tasks.get_task(task_id)
+    except ValueError:
+        await query.answer("Задача не найдена.", show_alert=True)
+        await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
+        return
+
+    await query.answer("Отложено")
+    await query.edit_message_text(
+        "<b>Отложено</b>\n\n"
+        f"{html.escape(task.topic_title, quote=False)}\n\n"
+        "Задача остается активной и будет в «⏰ Пора повторять», пока не пройдешь тест. "
+        "Если пропустишь сегодня — напомню завтра.",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -4425,7 +4488,19 @@ async def notify_due_reviews(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     for task in tasks:
         keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Начать тест", callback_data=f"{START_REVIEW_PREFIX}{task.id}")]]
+            [
+                [InlineKeyboardButton("Начать тест", callback_data=f"{START_REVIEW_PREFIX}{task.id}")],
+                [
+                    InlineKeyboardButton(
+                        "Отложить",
+                        callback_data=f"{POSTPONE_DUE_PREFIX}{task.id}",
+                    ),
+                    InlineKeyboardButton(
+                        "Отменить",
+                        callback_data=f"{CANCEL_REVIEW_PREFIX}{task.id}",
+                    ),
+                ],
+            ]
         )
         try:
             await context.bot.send_message(
@@ -4657,6 +4732,7 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(quiz_size_callback, pattern=f"^{QUIZ_SIZE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_quiz_size_callback, pattern=f"^{ABORT_QUIZ_SIZE}$"))
     app.add_handler(CallbackQueryHandler(start_review_callback, pattern=f"^{START_REVIEW_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(postpone_due_callback, pattern=f"^{POSTPONE_DUE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(explain_then_review_callback, pattern=f"^{EXPLAIN_THEN_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(skip_explain_review_callback, pattern=f"^{SKIP_EXPLAIN_REVIEW_PREFIX}"))
     app.add_handler(CallbackQueryHandler(quiz_answer_callback, pattern=f"^{QUIZ_ANSWER_PREFIX}"))
