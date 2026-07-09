@@ -280,24 +280,6 @@ class RepoService:
             fingerprint=self.material_fingerprint(topic.source_paths),
         )
 
-    def read_material_bytes(self, source_path: str) -> bytes | None:
-        """Raw file bytes, untouched by text decoding/newline translation.
-
-        Unlike get_topic_materials(), which decodes to str for prompts/quiz
-        generation, this is for cases (e.g. sending the file itself to the
-        user) where any str round-trip is unwanted and the exact original
-        bytes must go out as-is.
-        """
-        if not self.repo_path:
-            return None
-        path = self.repo_path / source_path
-        if not path.is_file():
-            return None
-        try:
-            return path.read_bytes()
-        except OSError:
-            return None
-
     def list_topics(self) -> list[RepoTopic]:
         if not self.is_available():
             return []

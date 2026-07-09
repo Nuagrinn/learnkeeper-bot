@@ -13,8 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputFile,
-    InputMediaDocument,
+    LinkPreviewOptions,
     ReplyKeyboardMarkup,
     Update,
 )
@@ -148,8 +147,6 @@ READ_MATERIAL_BLOCKS = "read_material_blocks"
 READ_MATERIAL_BLOCK_PREFIX = "read_material_block:"
 READ_MATERIAL_TOPIC_PREFIX = "read_material_topic:"
 ABORT_READ_MATERIAL = "abort_read_material"
-UTF8_BOM = b"\xef\xbb\xbf"
-MARKDOWN_MATERIAL_EXTENSIONS = {".md", ".markdown"}
 GENERATION_FRAMES = ("⏳", "⌛")
 QUIZ_SIZE_OPTIONS = (5, 10, 20, 30)
 QUIZ_SIZE_REVIEW = "review"
@@ -1235,42 +1232,19 @@ def _read_material_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _read_material_filename(topic_id: str, source_path: str) -> str:
-    return f"{topic_id}-{Path(source_path).name}"
+def _material_github_url(base_url: str, source_path: str) -> str:
+    return f"{base_url}/{source_path.lstrip('/')}"
 
 
-def _telegram_material_document_bytes(source_path: str, raw: bytes) -> bytes:
-    """Make UTF-8 Markdown unambiguous for Telegram mobile text viewers."""
-    if Path(source_path).suffix.lower() not in MARKDOWN_MATERIAL_EXTENSIONS:
-        return raw
-    if raw.startswith(UTF8_BOM):
-        return raw
-    try:
-        raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw
-    return UTF8_BOM + raw
-
-
-def _read_material_input_file(
-    services: AppServices, topic_id: str, source_path: str
-) -> InputFile | None:
-    """Build an InputFile without text/newline round-trips.
-
-    Deliberately does NOT go through TopicMaterial.content: that field comes
-    from Path.read_text(), which decodes to str and normalizes newlines
-    (CRLF -> LF) along the way. Markdown gets a UTF-8 BOM only in the upload
-    copy so Telegram mobile does not render Cyrillic as Latin-1 mojibake, while
-    keeping the MIME type exactly text/markdown for the Markdown viewer.
-    """
-    raw = services.repo.read_material_bytes(source_path)
-    if raw is None:
-        return None
-    document_bytes = _telegram_material_document_bytes(source_path, raw)
-    input_file = InputFile(document_bytes, filename=_read_material_filename(topic_id, source_path))
-    if Path(source_path).suffix.lower() in MARKDOWN_MATERIAL_EXTENSIONS:
-        input_file.mimetype = "text/markdown"
-    return input_file
+def _read_material_links_text(topic_title: str, links: list[tuple[str, str]]) -> str:
+    lines = [f"<b>{html.escape(topic_title, quote=False)}</b>", ""]
+    for label, url in links:
+        lines.append(f'📄 <a href="{html.escape(url)}">{html.escape(label, quote=False)}</a>')
+    lines.append("")
+    lines.append(
+        "Открой ссылку в Telegram — материал отрендерится прямо во встроенном браузере."
+    )
+    return "\n".join(lines)
 
 
 def _explain_check_prompt_text(topic_title: str) -> str:
@@ -3657,42 +3631,23 @@ async def read_material_topic_callback(update: Update, context: ContextTypes.DEF
         for material in materials.files
         if Path(material.source_path).suffix.lower() not in CODE_FILE_EXTENSIONS
     ]
-    input_files = [
-        input_file
-        for source_path in readable_paths
-        if (input_file := _read_material_input_file(services, topic.id, source_path)) is not None
-    ]
-    if not input_files:
+    if not readable_paths:
         await query.edit_message_text(f"Читаемые материалы для темы «{topic.title}» не найдены.")
         return
 
-    log.info("Read material requested topic_id=%s files=%d", topic.id, len(input_files))
-    try:
-        if len(input_files) == 1:
-            await context.bot.send_document(
-                chat_id=owner_id,
-                document=input_files[0],
-                caption=topic.title,
-                disable_content_type_detection=True,
-            )
-        else:
-            await context.bot.send_media_group(
-                chat_id=owner_id,
-                media=[
-                    InputMediaDocument(
-                        media=input_file,
-                        caption=topic.title if position == 0 else None,
-                        disable_content_type_detection=True,
-                    )
-                    for position, input_file in enumerate(input_files)
-                ],
-            )
-    except Exception:
-        log.exception("Failed to send material document(s) for topic_id=%s", topic.id)
-        await query.edit_message_text("Не получилось отправить файл(ы). Попробуй еще раз чуть позже.")
-        return
-
-    await query.edit_message_text(f"Материал «{topic.title}» отправлен ниже.")
+    links = [
+        (
+            Path(source_path).name,
+            _material_github_url(services.settings.materials_github_base_url, source_path),
+        )
+        for source_path in readable_paths
+    ]
+    log.info("Read material requested topic_id=%s files=%d", topic.id, len(links))
+    await query.edit_message_text(
+        _read_material_links_text(topic.title, links),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
+    )
 
 
 async def abort_read_material_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

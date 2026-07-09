@@ -79,6 +79,7 @@ class Settings:
     repo_pull_before_quiz: bool
     repo_pull_before_read: bool
     repo_pull_timeout_seconds: int
+    materials_github_base_url: str
     topic_inbox_agent_provider: str
     topic_inbox_agent_model: str
     topic_inbox_agent_timeout_seconds: int
@@ -290,6 +291,13 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         repo_pull_timeout_seconds = max(10, int(raw_repo_pull_timeout))
     except ValueError:
         repo_pull_timeout_seconds = 120
+    materials_github_base_url = (
+        os.getenv("MATERIALS_GITHUB_BASE_URL")
+        or env_file.get(
+            "MATERIALS_GITHUB_BASE_URL",
+            "https://github.com/Nuagrinn/interview-review/blob/main",
+        )
+    ).strip().rstrip("/")
     topic_inbox_default_provider = "claude_cli" if claude_code_oauth_token else "fake"
     topic_inbox_agent_provider = (
         os.getenv("TOPIC_INBOX_AGENT_PROVIDER")
@@ -390,6 +398,7 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         repo_pull_before_quiz=repo_pull_before_quiz,
         repo_pull_before_read=repo_pull_before_read,
         repo_pull_timeout_seconds=repo_pull_timeout_seconds,
+        materials_github_base_url=materials_github_base_url,
         topic_inbox_agent_provider=topic_inbox_agent_provider,
         topic_inbox_agent_model=topic_inbox_agent_model,
         topic_inbox_agent_timeout_seconds=topic_inbox_agent_timeout_seconds,
