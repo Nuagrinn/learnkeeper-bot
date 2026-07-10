@@ -98,7 +98,7 @@ class MistakeWorkServiceTest(unittest.TestCase):
             summary="Пробел в INCLUDE.",
             diagnosis="Нужно доразобрать устройство индекса.",
             weak_concepts=["INCLUDE", "index-only scan"],
-            interview_review_suggestion={
+            material_suggestion={
                 "title": "Индексы PostgreSQL: INCLUDE",
                 "target_section": "Базы данных",
                 "details": "Добавить примеры.",

@@ -12,11 +12,11 @@ class RepoServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.repo = self.root / "interview-review"
+        self.repo = self.root / "lk-prep"
         self.repo.mkdir()
         (self.repo / "ROOT.md").write_text(
             """
-# Interview Review Prep
+# LK Prep
 
 ## Code Review Go
 

@@ -252,7 +252,7 @@ class AppServices:
         self.settings = settings
         self.db = Database(settings.db_path)
         self.db.migrate()
-        self.repo = RepoService(settings.interview_review_path)
+        self.repo = RepoService(settings.lk_prep_path)
         self.llm_usage = LlmUsageService(
             self.db,
             price_config=LlmUsagePriceConfig(
@@ -586,7 +586,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         update,
         "<b>LearnKeeper на связи</b>\n\n"
         "Основные действия собраны в разделы снизу.\n\n"
-        f"<b>{BTN_TOPICS}</b> - список тем из interview-review\n"
+        f"<b>{BTN_TOPICS}</b> - список тем из lk-prep\n"
         f"<b>{BTN_READ_MATERIAL}</b> - прислать материал темы файлом (Telegram сам красиво его отрендерит)\n"
         f"<b>{BTN_REVIEW_MENU}</b> - добавить, посмотреть или отменить повторы\n"
         f"<b>{BTN_TEST_MENU}</b> - моментальные и ежедневные тесты\n"
@@ -1048,7 +1048,7 @@ async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _answer_long(
             update,
             "<b>Добавить повтор</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
         )
         return
     if not update.message:
@@ -1066,7 +1066,7 @@ async def _edit_review_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None
     if not grouped:
         await query.edit_message_text(
             "<b>Добавить повтор</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1342,7 +1342,7 @@ async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYP
         await _answer_long(
             update,
             "<b>Пройти тест сейчас</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
         )
         return
     if not update.message:
@@ -1361,7 +1361,7 @@ async def _show_explain_check_blocks(update: Update, context: ContextTypes.DEFAU
         await _answer_long(
             update,
             "<b>Объяснить тему</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
         )
         return
     if not update.message:
@@ -1380,7 +1380,7 @@ async def _show_read_material_blocks(update: Update, context: ContextTypes.DEFAU
         await _answer_long(
             update,
             "<b>Читать материал</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
         )
         return
     if not update.message:
@@ -1398,7 +1398,7 @@ async def _edit_instant_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not grouped:
         await query.edit_message_text(
             "<b>Пройти тест сейчас</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -3745,7 +3745,7 @@ async def explain_check_blocks_callback(update: Update, context: ContextTypes.DE
     if not grouped:
         await query.edit_message_text(
             "<b>Объяснить тему</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -3845,7 +3845,7 @@ async def read_material_blocks_callback(update: Update, context: ContextTypes.DE
     if not grouped:
         await query.edit_message_text(
             "<b>Читать материал</b>\n\n"
-            "В interview-review пока нет ready-тем с читаемыми материалами.",
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
             parse_mode=ParseMode.HTML,
         )
         return

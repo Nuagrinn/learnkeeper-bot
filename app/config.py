@@ -33,7 +33,7 @@ def _resolve_path(value: str, *, default: Path) -> Path:
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
-    interview_review_path: Path | None
+    lk_prep_path: Path | None
     telegram_bot_token: str
     tg_user_id: int | None
     telegram_api_id: int | None
@@ -102,10 +102,10 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
 
     raw_repo = (
         repo_path
-        or os.getenv("INTERVIEW_REVIEW_PATH")
-        or env_file.get("INTERVIEW_REVIEW_PATH", "")
+        or os.getenv("LK_PREP_PATH")
+        or env_file.get("LK_PREP_PATH", "")
     )
-    interview_review_path = _resolve_path(raw_repo, default=Path()) if raw_repo else None
+    lk_prep_path = _resolve_path(raw_repo, default=Path()) if raw_repo else None
 
     raw_token = os.getenv("TELEGRAM_BOT_TOKEN") or env_file.get("TELEGRAM_BOT_TOKEN", "")
     raw_user_id = os.getenv("TG_USER_ID") or env_file.get("TG_USER_ID", "")
@@ -295,7 +295,7 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         os.getenv("MATERIALS_GITHUB_BASE_URL")
         or env_file.get(
             "MATERIALS_GITHUB_BASE_URL",
-            "https://github.com/Nuagrinn/interview-review/blob/main",
+            "https://github.com/Nuagrinn/lk-prep/blob/main",
         )
     ).strip().rstrip("/")
     topic_inbox_default_provider = "claude_cli" if claude_code_oauth_token else "fake"
@@ -352,7 +352,7 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
 
     return Settings(
         db_path=resolved_db,
-        interview_review_path=interview_review_path,
+        lk_prep_path=lk_prep_path,
         telegram_bot_token=raw_token.strip(),
         tg_user_id=tg_user_id,
         telegram_api_id=telegram_api_id,

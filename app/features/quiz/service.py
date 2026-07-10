@@ -65,7 +65,7 @@ class QuizService:
         self.pull_timeout_seconds = pull_timeout_seconds
 
     def _sync_repo(self) -> None:
-        """Best-effort refresh of interview-review right before reading materials."""
+        """Best-effort refresh of lk-prep right before reading materials."""
         if not self.pull_before_quiz:
             return
         try:

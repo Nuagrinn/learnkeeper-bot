@@ -1,6 +1,6 @@
 # LearnKeeper
 
-Local-first bot for spaced repetition over an `interview-review` repository.
+Local-first bot for spaced repetition over an `lk-prep` repository.
 
 Current stage: local core MVP plus Telegram adapter, Claude CLI generation,
 mistake review backlog and a first VPS deployment kit.
@@ -29,11 +29,11 @@ mistake review backlog and a first VPS deployment kit.
 - Claude CLI quiz generator via subscription OAuth, without Anthropic API key
   fallback when `ALLOW_PAID_API=false`.
 - SQL migrations.
-- Local `interview-review` topic lookup from `ROOT.md`, optional `topics.json`,
+- Local `lk-prep` topic lookup from `ROOT.md`, optional `topics.json`,
   and markdown files.
 - Topic statistics contract: `section`, `order_index`, `material_fingerprint`.
 - Topic inbox for new study ideas: Telegram text/voice -> lightweight agent
-  normalizes the title/block -> SQLite backlog. `interview-review` is updated
+  normalizes the title/block -> SQLite backlog. `lk-prep` is updated
   manually by the user.
 - Mistake review backlog: after a quiz with wrong answers, the bot can ask an
   agent for a full report and save it into SQLite for later manual work.
@@ -54,7 +54,7 @@ mistake review backlog and a first VPS deployment kit.
   not change the quiz/scoring/interval logic at all — purely an optional step
   in front of it.
 - Optional `git pull --ff-only` before quiz generation, so VPS can refresh
-  `interview-review` before reading materials.
+  `lk-prep` before reading materials.
 - VPS deployment files: systemd unit, bootstrap script, deploy script, SQLite
   backup timer and GitHub Actions workflow template.
 - Telegram commands for owner-only `/topics`, `/review_add`, `/topic_add`,
@@ -84,14 +84,14 @@ does not create duplicates.
 You can point the CLI at your materials repo per command:
 
 ```powershell
-python -m app.cli --repo "C:\Users\Vladislav\Desktop\interview-review" review-add "Python GIL"
+python -m app.cli --repo "C:\Users\Vladislav\Desktop\lk-prep" review-add "Python GIL"
 ```
 
-Or copy `.env.example` to `.env` and fill `INTERVIEW_REVIEW_PATH`.
+Or copy `.env.example` to `.env` and fill `LK_PREP_PATH`.
 
 New study topic ideas are captured into SQLite through Telegram:
 `🗂 Проработка` -> `💡 Темы на изучение`. The bot no longer writes new topics
-into `interview-review`; move inbox items into the materials repo manually while
+into `lk-prep`; move inbox items into the materials repo manually while
 working locally.
 
 ## Migrations
@@ -145,13 +145,13 @@ directory or upload the project archive there. If the repos are private, prepare
 SSH deploy keys on the VPS before running bootstrap.
 
 Then run the bootstrap script as root. Provide the bot repository URL, and
-optionally the `interview-review` repository URL:
+optionally the `lk-prep` repository URL:
 
 ```bash
 git clone git@github.com:YOUR_USER/learnkeeper-bot.git /tmp/learnkeeper-bot
 cd /tmp/learnkeeper-bot
 export BOT_REPO_URL=git@github.com:YOUR_USER/learnkeeper-bot.git
-export MATERIALS_REPO_URL=git@github.com:YOUR_USER/interview-review.git
+export MATERIALS_REPO_URL=git@github.com:YOUR_USER/lk-prep.git
 export BOT_GIT_BRANCH=main
 export MATERIALS_GIT_BRANCH=main
 bash scripts/vps-bootstrap.sh
@@ -202,13 +202,13 @@ APP_DIR       # optional, defaults to /opt/learnkeeper/learnkeeper-bot
 After that, every push to `main` deploys the bot to VPS by SSH and runs
 `scripts/vps-deploy.sh`.
 
-### interview-review sync on VPS
+### lk-prep sync on VPS
 
 For materials updates, the bot does not need a full redeploy. Enable this in
 the VPS `.env`:
 
 ```env
-INTERVIEW_REVIEW_PATH=/opt/learnkeeper/interview-review
+LK_PREP_PATH=/opt/learnkeeper/lk-prep
 REPO_GIT_REMOTE=origin
 REPO_GIT_BRANCH=main
 REPO_PULL_BEFORE_QUIZ=true
@@ -216,7 +216,7 @@ REPO_PULL_TIMEOUT_SECONDS=120
 ```
 
 Before generating a review, instant or daily quiz, LearnKeeper runs a best-effort
-`git pull --ff-only` in `interview-review`. If the pull fails, the failure is
+`git pull --ff-only` in `lk-prep`. If the pull fails, the failure is
 logged and quiz generation continues from the local copy already on disk.
 
 ### Backups
@@ -403,7 +403,7 @@ button selection by block/topic. Voice input is used only after `🗂 Идеи` 
 topic. Voice messages outside these flows are ignored with a hint, so the bot
 does not run STT for random audio.
 
-For quiz generation on VPS, `interview-review` can be refreshed right before the
+For quiz generation on VPS, `lk-prep` can be refreshed right before the
 bot reads materials:
 
 ```env
@@ -417,7 +417,7 @@ This is read-only from the bot's point of view: it runs `git pull --ff-only` and
 continues with the local copy if the pull fails.
 
 Topic inbox uses a lighter agent. It does not inspect or modify
-`interview-review`; it only rewrites rough text/STT into a clean title and
+`lk-prep`; it only rewrites rough text/STT into a clean title and
 optional block:
 
 ```env
@@ -430,7 +430,7 @@ Use `TOPIC_INBOX_AGENT_PROVIDER=fake` for fully local no-LLM testing.
 
 Mistake review uses a separate agent. It receives the finished quiz session,
 wrong answers, explanations and short material excerpts, then returns a
-structured report. It does not write to `interview-review`; saved reports live
+structured report. It does not write to `lk-prep`; saved reports live
 in SQLite:
 
 ```env
@@ -447,7 +447,7 @@ a self-explanation (voice-transcribed or typed text) plus the topic's doc-only
 material (code files excluded, same as quiz generation) and returns a graded
 JSON: which concepts were covered/missing, false-vs-correct mental model pairs,
 a 1-4 understanding-layer score, and one follow-up question. It never writes to
-`interview-review`; saved checks live in their own SQLite table:
+`lk-prep`; saved checks live in their own SQLite table:
 
 ```env
 EXPLAIN_CHECK_AGENT_PROVIDER=claude_cli

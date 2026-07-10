@@ -260,7 +260,7 @@ class TelegramFormattersTest(unittest.TestCase):
             summary="Путается INCLUDE и ключ индекса.",
             diagnosis="Нужно доразобрать устройство B-tree.",
             weak_concepts=["INCLUDE", "index-only scan"],
-            interview_review_suggestion={
+            material_suggestion={
                 "title": "Индексы PostgreSQL: INCLUDE",
                 "target_section": "Базы данных",
                 "details": "Добавить материал про leaf tuples.",
@@ -281,7 +281,7 @@ class TelegramFormattersTest(unittest.TestCase):
 
         self.assertIn("Разбор ошибок готов", text)
         self.assertIn("🔴 высокая", text)
-        self.assertIn("Что потом добавить в interview-review", text)
+        self.assertIn("Что потом добавить в lk-prep", text)
         self.assertIn("Можно сохранить", text)
 
     def test_long_mistake_review_preview_splits_within_telegram_limit(self) -> None:
@@ -292,7 +292,7 @@ class TelegramFormattersTest(unittest.TestCase):
             summary="Развёрнутое описание проблемы. " * 60,
             diagnosis="Подробный диагноз с деталями. " * 300,
             weak_concepts=[f"слабый концепт номер {i} с пояснением" for i in range(8)],
-            interview_review_suggestion={
+            material_suggestion={
                 "title": "Слайсы",
                 "target_section": "Базовый Go",
                 "details": "Что добавить в материалы. " * 300,

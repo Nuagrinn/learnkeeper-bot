@@ -22,12 +22,12 @@ class QuizServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.repo_path = self.root / "interview-review"
+        self.repo_path = self.root / "lk-prep"
         self.repo_path.mkdir()
         (self.repo_path / "ROOT.md").write_text(
             "\n".join(
                 [
-                    "# Interview Review",
+                    "# LK Prep",
                     "",
                     "## Python",
                     "",

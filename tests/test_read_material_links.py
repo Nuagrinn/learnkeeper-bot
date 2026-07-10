@@ -8,23 +8,23 @@ from app.adapters.telegram.bot import _material_github_url, _read_material_links
 class ReadMaterialLinksTest(unittest.TestCase):
     def test_material_github_url_joins_base_and_path(self) -> None:
         url = _material_github_url(
-            "https://github.com/Nuagrinn/interview-review/blob/main",
+            "https://github.com/Nuagrinn/lk-prep/blob/main",
             "base-go/01-slices/review.md",
         )
 
         self.assertEqual(
-            "https://github.com/Nuagrinn/interview-review/blob/main/base-go/01-slices/review.md",
+            "https://github.com/Nuagrinn/lk-prep/blob/main/base-go/01-slices/review.md",
             url,
         )
 
     def test_material_github_url_strips_leading_slash_on_source_path(self) -> None:
         url = _material_github_url(
-            "https://github.com/Nuagrinn/interview-review/blob/main",
+            "https://github.com/Nuagrinn/lk-prep/blob/main",
             "/base-go/01-slices/review.md",
         )
 
         self.assertEqual(
-            "https://github.com/Nuagrinn/interview-review/blob/main/base-go/01-slices/review.md",
+            "https://github.com/Nuagrinn/lk-prep/blob/main/base-go/01-slices/review.md",
             url,
         )
 

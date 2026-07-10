@@ -69,7 +69,7 @@ class MistakeReviewAgentTest(unittest.TestCase):
                 "summary": "Путается INCLUDE и ключ индекса.",
                 "diagnosis": "Нужно доразобрать устройство B-tree leaf pages.",
                 "weak_concepts": ["INCLUDE", "index-only scan"],
-                "interview_review_suggestion": {
+                "material_suggestion": {
                     "title": "Индексы PostgreSQL: INCLUDE",
                     "target_section": "Базы данных",
                     "details": "Добавить материал про leaf tuples и visibility map.",

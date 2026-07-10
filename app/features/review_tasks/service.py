@@ -143,7 +143,7 @@ class ReviewTaskService:
             raise TopicNotReadyError(
                 query,
                 reason=(
-                    f"Тема \"{query}\" не найдена в interview-review "
+                    f"Тема \"{query}\" не найдена в lk-prep "
                     "с готовыми материалами."
                 ),
                 suggestions=suggestions,
@@ -167,7 +167,7 @@ class ReviewTaskService:
         if not topic:
             raise TopicNotReadyError(
                 topic_id,
-                reason=f"Тема с id \"{topic_id}\" не найдена в interview-review.",
+                reason=f"Тема с id \"{topic_id}\" не найдена в lk-prep.",
                 suggestions=[],
             )
         materials = self.repo.get_topic_materials(topic)

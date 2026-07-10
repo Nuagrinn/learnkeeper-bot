@@ -19,7 +19,7 @@ class ReviewTaskServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.repo = self.root / "interview-review"
+        self.repo = self.root / "lk-prep"
         self.repo.mkdir()
         (self.repo / "python-gil.md").write_text(
             "# Python GIL\n\nNotes about global interpreter lock.\n",

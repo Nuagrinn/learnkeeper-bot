@@ -1,2 +1,2 @@
-"""Interview review bot package."""
+"""LearnKeeper bot package."""
 

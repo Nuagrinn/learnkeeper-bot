@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 PROMPT_VERSION = "learnkeeper-quiz-v2"
 # Covers every current single-topic material in full (largest measured is ~66.6k
 # chars for db02/postgresql-mvcc after code-file exclusion) with headroom for
-# growth. Re-check this if interview-review grows a topic past ~65k chars.
+# growth. Re-check this if lk-prep grows a topic past ~65k chars.
 MATERIAL_CHAR_LIMIT = 70_000
 # Standalone practice/source code files are dropped from quiz material: the user
 # does not memorize whole code files. Code-reasoning questions ("what does this

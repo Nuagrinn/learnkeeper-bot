@@ -237,10 +237,10 @@ def format_mistake_review_preview(report: MistakeReviewResult) -> str:
     if report.weak_concepts:
         lines.extend(["", "<b>Что подтянуть</b>"])
         lines.extend(f"- {_h(item)}" for item in report.weak_concepts[:8])
-    suggestion = report.interview_review_suggestion
+    suggestion = report.material_suggestion
     details = str(suggestion.get("details") or "").strip()
     if details:
-        lines.extend(["", "<b>Что потом добавить в interview-review</b>", _h(_clip(details, 700))])
+        lines.extend(["", "<b>Что потом добавить в lk-prep</b>", _h(_clip(details, 700))])
     if report.questions_to_revisit:
         lines.extend(["", "<b>Вопросы для повторной проверки</b>"])
         for item in report.questions_to_revisit[:5]:
@@ -325,7 +325,7 @@ def format_mistake_work_item(item: MistakeWorkItem) -> str:
         lines.extend(f"- {_h(concept)}" for concept in item.weak_concepts[:12])
     details = str(item.suggestion.get("details") or "").strip()
     if details:
-        lines.extend(["", "<b>Что добавить/усилить в interview-review</b>", _h(_clip(details, 700))])
+        lines.extend(["", "<b>Что добавить/усилить в lk-prep</b>", _h(_clip(details, 700))])
     revisit = item.report.get("questions_to_revisit")
     if isinstance(revisit, list) and revisit:
         lines.extend(["", "<b>Вопросы для повторной проверки</b>"])

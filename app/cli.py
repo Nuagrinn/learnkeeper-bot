@@ -27,14 +27,14 @@ from app.features.speech.service import SpeechToTextError
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="learnkeeper-bot")
     parser.add_argument("--db", help="Path to SQLite database")
-    parser.add_argument("--repo", help="Path to local interview-review repository")
+    parser.add_argument("--repo", help="Path to local lk-prep repository")
 
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Create/update local SQLite schema")
     sub.add_parser("migrate", help="Apply pending SQLite migrations")
     sub.add_parser("db-status", help="Show SQLite database and applied migrations")
-    sub.add_parser("repo-status", help="Show configured interview-review repository")
+    sub.add_parser("repo-status", help="Show configured lk-prep repository")
     sub.add_parser("llm-usage", help="Show local LLM usage statistics")
 
     material_mtproto = sub.add_parser(
@@ -45,12 +45,12 @@ def _build_parser() -> argparse.ArgumentParser:
     material_mtproto.add_argument(
         "--source",
         default="",
-        help="Optional material path from interview-review. Defaults to first .md source.",
+        help="Optional material path from lk-prep. Defaults to first .md source.",
     )
     material_mtproto.add_argument(
         "--pull",
         action="store_true",
-        help="Run the configured interview-review git pull before sending the probe.",
+        help="Run the configured lk-prep git pull before sending the probe.",
     )
 
     add = sub.add_parser("review-add", help="Create a review task for a topic")
@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cancel = sub.add_parser("cancel", help="Cancel an active review task")
     cancel.add_argument("task_id")
 
-    topics = sub.add_parser("topics", help="Search topics in interview-review")
+    topics = sub.add_parser("topics", help="Search topics in lk-prep")
     topics.add_argument("query", nargs="?", default="")
     topics.add_argument("--limit", type=int, default=20)
 
@@ -102,7 +102,7 @@ def _service(args: argparse.Namespace) -> tuple[ReviewTaskService, RepoService]:
     settings = load_settings(db_path=args.db, repo_path=args.repo)
     db = Database(settings.db_path)
     db.initialize()
-    repo = RepoService(settings.interview_review_path)
+    repo = RepoService(settings.lk_prep_path)
     return ReviewTaskService(db, repo), repo
 
 
@@ -139,9 +139,9 @@ def _material_probe_filename(topic_id: str, source_path: str) -> str:
 
 async def _send_material_mtproto_probe(args: argparse.Namespace) -> None:
     settings = load_settings(db_path=args.db, repo_path=args.repo)
-    repo = RepoService(settings.interview_review_path)
+    repo = RepoService(settings.lk_prep_path)
     if not repo.is_available() or repo.repo_path is None:
-        print("interview-review repository is not configured or not available.")
+        print("lk-prep repository is not configured or not available.")
         return
 
     if args.pull and settings.repo_pull_before_read:
@@ -321,8 +321,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "repo-status":
         settings = load_settings(db_path=args.db, repo_path=args.repo)
-        repo = RepoService(settings.interview_review_path)
-        print(f"Repo path: {settings.interview_review_path or '(not configured)'}")
+        repo = RepoService(settings.lk_prep_path)
+        print(f"Repo path: {settings.lk_prep_path or '(not configured)'}")
         print(f"Available: {repo.is_available()}")
         topics_count = len(repo.list_topics()) if repo.is_available() else 0
         print(f"Indexed topics: {topics_count}")
@@ -440,7 +440,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "quiz-preview":
         settings = load_settings(db_path=args.db, repo_path=args.repo)
-        repo = RepoService(settings.interview_review_path)
+        repo = RepoService(settings.lk_prep_path)
         topic = repo.resolve_topic(args.topic)
         materials = repo.get_topic_materials(topic)
         llm_usage = _build_llm_usage_service(settings)

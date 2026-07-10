@@ -168,9 +168,9 @@ class RepoService:
         keep generating a quiz from the materials already on disk.
         """
         if not self.is_available() or self.repo_path is None:
-            return RepoPullResult("skipped", "interview-review repository is not available")
+            return RepoPullResult("skipped", "lk-prep repository is not available")
         if not (self.repo_path / ".git").exists():
-            return RepoPullResult("skipped", "interview-review is not a git repository")
+            return RepoPullResult("skipped", "lk-prep is not a git repository")
 
         runner = run_command or subprocess.run
         args = ["git", "-C", str(self.repo_path), "pull", "--ff-only"]
@@ -184,16 +184,16 @@ class RepoService:
                 timeout=timeout_seconds,
             )
         except FileNotFoundError:
-            log.warning("git executable not found; skipping interview-review pull")
+            log.warning("git executable not found; skipping lk-prep pull")
             return RepoPullResult("failed", "git executable not found")
         except subprocess.TimeoutExpired:
-            log.warning("interview-review pull timed out after %s seconds", timeout_seconds)
+            log.warning("lk-prep pull timed out after %s seconds", timeout_seconds)
             return RepoPullResult("failed", f"git pull timed out after {timeout_seconds}s")
 
         if result.returncode != 0:
             detail = ((result.stderr or "") + (result.stdout or "")).strip()[:300]
             log.warning(
-                "interview-review pull failed returncode=%s detail=%s",
+                "lk-prep pull failed returncode=%s detail=%s",
                 result.returncode,
                 detail,
             )
@@ -201,10 +201,10 @@ class RepoService:
 
         output = (result.stdout or "").strip()
         if "up to date" in output.lower():
-            log.info("interview-review already up to date")
+            log.info("lk-prep already up to date")
             return RepoPullResult("up_to_date", output)
         log.info(
-            "interview-review pull applied updates: %s",
+            "lk-prep pull applied updates: %s",
             output.splitlines()[-1] if output else "(no output)",
         )
         return RepoPullResult("updated", output)

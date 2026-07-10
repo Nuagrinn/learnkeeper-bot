@@ -44,7 +44,7 @@ class MistakeWorkService:
             diagnosis=report.diagnosis,
             weak_concepts=report.weak_concepts,
             questions=questions,
-            suggestion=report.interview_review_suggestion,
+            suggestion=report.material_suggestion,
             report=_report_payload(report),
             agent_provider=report.provider,
             agent_model=report.model,

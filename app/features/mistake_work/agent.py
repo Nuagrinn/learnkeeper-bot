@@ -29,7 +29,7 @@ MISTAKE_REVIEW_JSON_SCHEMA = {
         "summary",
         "diagnosis",
         "weak_concepts",
-        "interview_review_suggestion",
+        "material_suggestion",
         "questions_to_revisit",
     ],
     "properties": {
@@ -39,7 +39,7 @@ MISTAKE_REVIEW_JSON_SCHEMA = {
         "summary": {"type": "string"},
         "diagnosis": {"type": "string"},
         "weak_concepts": {"type": "array", "items": {"type": "string"}},
-        "interview_review_suggestion": {
+        "material_suggestion": {
             "type": "object",
             "additionalProperties": False,
             "required": ["title", "target_section", "details"],
@@ -94,7 +94,7 @@ class MistakeReviewResult:
     summary: str
     diagnosis: str
     weak_concepts: list[str]
-    interview_review_suggestion: dict[str, Any]
+    material_suggestion: dict[str, Any]
     questions_to_revisit: list[dict[str, Any]]
     provider: str
     model: str
@@ -153,7 +153,7 @@ class FakeMistakeReviewAgent:
             summary=f"Ошибок: {len(request.mistakes)} из {request.total_count}.",
             diagnosis=diagnosis,
             weak_concepts=weak_concepts,
-            interview_review_suggestion=suggestion,
+            material_suggestion=suggestion,
             questions_to_revisit=questions,
             provider=self.provider,
             model=self.model,
@@ -165,7 +165,7 @@ class FakeMistakeReviewAgent:
                 "summary": f"Ошибок: {len(request.mistakes)} из {request.total_count}.",
                 "diagnosis": diagnosis,
                 "weak_concepts": weak_concepts,
-                "interview_review_suggestion": suggestion,
+                "material_suggestion": suggestion,
                 "questions_to_revisit": questions,
             },
         )
@@ -411,7 +411,7 @@ class ClaudeCliMistakeReviewAgent:
 def _system_prompt() -> str:
     return (
         "Ты аналитик ошибок LearnKeeper.\n"
-        "Пользователь прошел quiz по материалам interview-review и ошибся в части вопросов.\n"
+        "Пользователь прошел quiz по материалам lk-prep и ошибся в части вопросов.\n"
         "Твоя задача: вернуть краткий, но полезный отчет для дальнейшей ручной проработки.\n\n"
         "Жесткие правила:\n"
         "- пиши максимально сжато и по делу: без воды, вступлений и повторов;\n"
@@ -422,7 +422,7 @@ def _system_prompt() -> str:
         "- анализируй только JSON, который получил на вход;\n"
         "- верни только JSON по schema.\n\n"
         "Отчет должен помогать понять не просто 'какой ответ правильный', а какой пробел стоит "
-        "потом руками доработать в interview-review.\n"
+        "потом руками доработать в lk-prep.\n"
         "priority=high ставь, если ошибка показывает базовое непонимание темы или несколько ошибок "
         "об одном концепте; normal для обычной доработки; low для единичной неточности.\n"
     )
@@ -438,7 +438,7 @@ def _user_prompt(request: MistakeReviewInput) -> str:
         "- summary: 1-2 предложения, до 250 символов;\n"
         "- diagnosis: один абзац, 2-4 предложения, до 500 символов;\n"
         "- weak_concepts: 3-6 коротких пунктов;\n"
-        "- interview_review_suggestion.details: 1-2 предложения, до 250 символов;\n"
+        "- material_suggestion.details: 1-2 предложения, до 250 символов;\n"
         "- questions_to_revisit: только реально важные вопросы; в каждом missed_point, "
         "correct_idea и practice_prompt — по одному короткому предложению.\n\n"
         "Смысл полей:\n"
@@ -448,7 +448,7 @@ def _user_prompt(request: MistakeReviewInput) -> str:
         "- summary: короткая выжимка;\n"
         "- diagnosis: суть пробела;\n"
         "- weak_concepts: конкретные слабые понятия;\n"
-        "- interview_review_suggestion: что потом руками добавить/усилить в interview-review;\n"
+        "- material_suggestion: что потом руками добавить/усилить в lk-prep;\n"
         "- questions_to_revisit: что было упущено и как коротко потренировать.\n"
     )
 
@@ -527,7 +527,7 @@ def _result_from_payload(
     ][:12]
     if not weak_concepts:
         weak_concepts = _weak_concepts_from_mistakes(request.mistakes)
-    suggestion = payload.get("interview_review_suggestion")
+    suggestion = payload.get("material_suggestion")
     if not isinstance(suggestion, dict):
         suggestion = {}
     suggestion.setdefault("title", title)
@@ -545,7 +545,7 @@ def _result_from_payload(
         summary=summary,
         diagnosis=diagnosis,
         weak_concepts=weak_concepts,
-        interview_review_suggestion=suggestion,
+        material_suggestion=suggestion,
         questions_to_revisit=questions,
         provider=provider,
         model=model,
