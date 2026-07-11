@@ -75,6 +75,35 @@ class RepoServiceTest(unittest.TestCase):
         self.assertEqual("cr01", matches[0].id)
         self.assertGreaterEqual(matches[0].score, 50)
 
+    def test_get_topic_materials_parses_lk_frontmatter(self) -> None:
+        (self.repo / "01-data-race" / "review.md").write_text(
+            """---
+lk:
+  source_role: primary_source_artifact
+  source_refs:
+    - "Go Memory Model"
+  prompt_helper: |
+    Проверяй не определение, а понимание happens-before и race detector.
+---
+
+# Data race в Go
+
+Материал темы.
+""",
+            encoding="utf-8",
+        )
+
+        topic = RepoService(self.repo).get_topic("cr01")
+        assert topic is not None
+        materials = RepoService(self.repo).get_topic_materials(topic)
+
+        material = materials.files[0]
+        self.assertEqual("primary_source_artifact", material.metadata.source_role)
+        self.assertEqual(["Go Memory Model"], material.metadata.source_refs)
+        self.assertIn("happens-before", material.metadata.prompt_helper)
+        self.assertTrue(material.content.startswith("# Data race"))
+        self.assertNotIn("source_role", material.content)
+
     def test_pull_latest_skips_when_not_a_git_repo(self) -> None:
         result = RepoService(self.repo).pull_latest()
 

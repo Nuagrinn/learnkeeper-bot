@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import uuid
 from datetime import datetime
 
@@ -571,4 +572,22 @@ def _material_snapshot(materials: TopicMaterials) -> dict[str, object]:
         "topic_title": materials.topic.title,
         "source_paths": [file.source_path for file in materials.files],
         "fingerprint": materials.fingerprint,
+        "metadata": [_material_metadata_snapshot(file) for file in materials.files],
     }
+
+
+def _material_metadata_snapshot(file: TopicMaterial) -> dict[str, object]:
+    metadata = file.metadata
+    return {
+        "source_path": file.source_path,
+        "source_role": metadata.source_role,
+        "source_refs": metadata.source_refs,
+        "prompt_helper_hash": _prompt_helper_hash(metadata.prompt_helper),
+    }
+
+
+def _prompt_helper_hash(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()

@@ -1992,27 +1992,23 @@ def _session_section(services: AppServices, session: QuizSession) -> str:
     return ""
 
 
-def _material_context(services: AppServices, session: QuizSession) -> list[dict[str, str]]:
+def _material_context(services: AppServices, session: QuizSession) -> list[dict[str, object]]:
     repo_path = services.repo.repo_path
     raw_paths = session.material_snapshot.get("source_paths")
     if not repo_path or not isinstance(raw_paths, list):
         return []
-    context: list[dict[str, str]] = []
+    context: list[dict[str, object]] = []
     total_chars = 0
     for raw_path in raw_paths[:8]:
         rel = str(raw_path).strip()
         if not rel:
             continue
-        path = repo_path / rel
-        if not path.is_file():
+        material = services.repo.read_material(rel)
+        if material is None:
             continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        excerpt = content[:3000]
+        excerpt = material.content[:3000]
         total_chars += len(excerpt)
-        context.append({"source_path": rel, "excerpt": excerpt})
+        context.append(_material_context_entry(material, excerpt))
         if total_chars >= 10000:
             break
     return context
@@ -4039,7 +4035,7 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
     log.exception("Unhandled Telegram error while handling update=%s", update, exc_info=error)
 
 
-def _explain_check_material(services: AppServices, topic) -> list[dict[str, str]]:
+def _explain_check_material(services: AppServices, topic) -> list[dict[str, object]]:
     """Doc-only, capped material for the explain-check agent.
 
     Deliberately a local copy of quiz.generator's doc-file selection + char cap
@@ -4056,14 +4052,29 @@ def _explain_check_material(services: AppServices, topic) -> list[dict[str, str]
     if not doc_files:
         doc_files = materials.files
     remaining = MATERIAL_CHAR_LIMIT
-    context: list[dict[str, str]] = []
+    context: list[dict[str, object]] = []
     for file in doc_files:
         if remaining <= 0:
             break
         excerpt = file.content[:remaining]
         remaining -= len(excerpt)
-        context.append({"source_path": file.source_path, "excerpt": excerpt})
+        context.append(_material_context_entry(file, excerpt))
     return context
+
+
+def _material_context_entry(material, excerpt: str) -> dict[str, object]:
+    metadata = material.metadata
+    entry: dict[str, object] = {
+        "source_path": material.source_path,
+        "excerpt": excerpt,
+    }
+    if metadata.source_role:
+        entry["source_role"] = metadata.source_role
+    if metadata.source_refs:
+        entry["source_refs"] = metadata.source_refs
+    if metadata.prompt_helper:
+        entry["prompt_helper"] = metadata.prompt_helper
+    return entry
 
 
 def _explain_check_wait_text(*, frame: str, elapsed_seconds: int = 0) -> str:

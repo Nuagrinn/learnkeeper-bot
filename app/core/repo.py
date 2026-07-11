@@ -65,9 +65,21 @@ class RepoTopic:
 
 
 @dataclass(frozen=True)
+class MaterialMetadata:
+    source_role: str = ""
+    source_refs: list[str] = field(default_factory=list)
+    prompt_helper: str = ""
+
+    @property
+    def has_guidance(self) -> bool:
+        return bool(self.source_role or self.source_refs or self.prompt_helper)
+
+
+@dataclass(frozen=True)
 class TopicMaterial:
     source_path: str
     content: str
+    metadata: MaterialMetadata = field(default_factory=MaterialMetadata)
 
 
 @dataclass(frozen=True)
@@ -266,19 +278,27 @@ class RepoService:
         files: list[TopicMaterial] = []
         if self.repo_path:
             for rel in topic.source_paths:
-                path = self.repo_path / rel
-                if not path.is_file():
-                    continue
-                try:
-                    content = path.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                files.append(TopicMaterial(source_path=rel, content=content))
+                material = self.read_material(rel)
+                if material:
+                    files.append(material)
         return TopicMaterials(
             topic=topic,
             files=files,
             fingerprint=self.material_fingerprint(topic.source_paths),
         )
+
+    def read_material(self, source_path: str) -> TopicMaterial | None:
+        if not self.repo_path:
+            return None
+        path = self.repo_path / source_path
+        if not path.is_file():
+            return None
+        try:
+            raw_content = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        content, metadata = _extract_material_metadata(raw_content)
+        return TopicMaterial(source_path=source_path, content=content, metadata=metadata)
 
     def list_topics(self) -> list[RepoTopic]:
         if not self.is_available():
@@ -496,3 +516,113 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_material_metadata(content: str) -> tuple[str, MaterialMetadata]:
+    text = content.lstrip("\ufeff")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return content, MaterialMetadata()
+
+    end_index = None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            end_index = index
+            break
+    if end_index is None:
+        return content, MaterialMetadata()
+
+    frontmatter = "".join(lines[1:end_index])
+    body = "".join(lines[end_index + 1 :])
+    return body.lstrip("\r\n"), _parse_lk_frontmatter(frontmatter)
+
+
+def _parse_lk_frontmatter(frontmatter: str) -> MaterialMetadata:
+    lk_lines = _lk_frontmatter_lines(frontmatter)
+    if not lk_lines:
+        return MaterialMetadata()
+
+    source_role = ""
+    source_refs: list[str] = []
+    prompt_helper_lines: list[str] = []
+    mode = ""
+
+    for raw_line in lk_lines:
+        stripped = raw_line.strip()
+        if mode == "prompt_helper":
+            if _is_lk_key_line(raw_line):
+                mode = ""
+            else:
+                prompt_helper_lines.append(_strip_lk_indent(raw_line))
+                continue
+
+        if mode == "source_refs":
+            if stripped.startswith("- "):
+                source_refs.append(_clean_yaml_scalar(stripped[2:]))
+                continue
+            if _is_lk_key_line(raw_line):
+                mode = ""
+
+        if stripped.startswith("source_role:"):
+            source_role = _clean_yaml_scalar(stripped.split(":", 1)[1])
+            continue
+        if stripped.startswith("source_refs:"):
+            mode = "source_refs"
+            inline = stripped.split(":", 1)[1].strip()
+            if inline.startswith("[") and inline.endswith("]"):
+                source_refs.extend(
+                    _clean_yaml_scalar(item)
+                    for item in inline.strip("[]").split(",")
+                    if _clean_yaml_scalar(item)
+                )
+            continue
+        if stripped.startswith("prompt_helper:"):
+            value = stripped.split(":", 1)[1].strip()
+            if value in ("|", ">"):
+                mode = "prompt_helper"
+                continue
+            prompt_helper_lines.append(_clean_yaml_scalar(value))
+
+    prompt_helper = "\n".join(prompt_helper_lines).strip()
+    return MaterialMetadata(
+        source_role=source_role.strip(),
+        source_refs=[ref for ref in source_refs if ref],
+        prompt_helper=prompt_helper,
+    )
+
+
+def _lk_frontmatter_lines(frontmatter: str) -> list[str]:
+    lines = frontmatter.splitlines()
+    result: list[str] = []
+    in_lk = False
+    for line in lines:
+        if not in_lk:
+            if line.strip() == "lk:":
+                in_lk = True
+            continue
+        if line.strip() and not line.startswith((" ", "\t")):
+            break
+        result.append(line)
+    return result
+
+
+def _is_lk_key_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("- "):
+        return False
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", stripped))
+
+
+def _strip_lk_indent(line: str) -> str:
+    if line.startswith("    "):
+        return line[4:]
+    if line.startswith("  "):
+        return line[2:]
+    return line.strip()
+
+
+def _clean_yaml_scalar(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1].strip()
+    return text

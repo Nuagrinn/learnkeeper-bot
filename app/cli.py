@@ -74,6 +74,12 @@ def _build_parser() -> argparse.ArgumentParser:
     topics.add_argument("query", nargs="?", default="")
     topics.add_argument("--limit", type=int, default=20)
 
+    topic_materials = sub.add_parser(
+        "topic-materials",
+        help="Show materials and metadata for a lk-prep topic",
+    )
+    topic_materials.add_argument("topic", help="Topic id/title/search query")
+
     quiz_preview = sub.add_parser(
         "quiz-preview",
         help="Generate quiz questions for a topic without saving a session",
@@ -436,6 +442,32 @@ def main(argv: list[str] | None = None) -> None:
             paths = ", ".join(topic.source_paths) or "-"
             section = f" | {topic.section}" if topic.section else ""
             print(f"{topic.id} | {topic.title} | {topic.status}{section} | {paths}")
+        return
+
+    if args.command == "topic-materials":
+        topic = repo.resolve_topic(args.topic)
+        materials = repo.get_topic_materials(topic)
+        print(f"Topic: {topic.id} | {topic.title}")
+        print(f"Status: {topic.status}")
+        print(f"Section: {topic.section or '-'}")
+        print(f"Fingerprint: {materials.fingerprint or '-'}")
+        print()
+        if not materials.files:
+            print("No readable materials.")
+            return
+        for file in materials.files:
+            metadata = file.metadata
+            print(file.source_path)
+            print(f"- chars: {len(file.content)}")
+            print(f"- source_role: {metadata.source_role or '-'}")
+            print(f"- source_refs: {', '.join(metadata.source_refs) if metadata.source_refs else '-'}")
+            print(f"- prompt_helper_chars: {len(metadata.prompt_helper)}")
+            if metadata.prompt_helper:
+                preview = metadata.prompt_helper.replace("\n", " ")
+                if len(preview) > 180:
+                    preview = preview[:177].rstrip() + "..."
+                print(f"- prompt_helper_preview: {preview}")
+            print()
         return
 
     if args.command == "quiz-preview":

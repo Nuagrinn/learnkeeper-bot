@@ -5,7 +5,7 @@ import os
 import subprocess
 import unittest
 
-from app.core.repo import RepoTopic, TopicMaterial, TopicMaterials
+from app.core.repo import MaterialMetadata, RepoTopic, TopicMaterial, TopicMaterials
 from app.features.quiz.generator import ClaudeCliQuizGenerator, QuizGenerationError
 
 
@@ -281,6 +281,48 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
         self.assertIn("cr/review.md", sent)
         self.assertNotIn("cr/practice_service.go", sent)
         self.assertNotIn("package main", sent)
+
+    def test_includes_material_guidance_metadata_in_prompt(self) -> None:
+        materials = TopicMaterials(
+            topic=self.topic,
+            files=[
+                TopicMaterial(
+                    source_path="base-go/slices.md",
+                    content="# Слайсы\n\nlen, cap, append.",
+                    metadata=MaterialMetadata(
+                        source_role="primary_source_artifact",
+                        source_refs=["Go Blog: Slices"],
+                        prompt_helper="Проверяй aliasing и full slice expression.",
+                    ),
+                )
+            ],
+            fingerprint="abc",
+        )
+        payload = {
+            "questions": [
+                {
+                    "text": "Что ограничивает full slice expression?",
+                    "options": ["cap", "len", "type", "GC"],
+                    "correct_index": 0,
+                    "explanation": "Третий индекс задает capacity результата.",
+                    "source_refs": ["base-go/slices.md"],
+                }
+            ]
+        }
+        runner = RecordingRunner(json.dumps(payload, ensure_ascii=False))
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=runner,
+            allow_paid_api=False,
+        )
+
+        generator.generate(topic=self.topic, materials=materials, question_count=1)
+
+        sent = runner.calls[0]["input"]
+        self.assertIn("MATERIAL_GUIDANCE", sent)
+        self.assertIn("SOURCE_ROLE: primary_source_artifact", sent)
+        self.assertIn("Go Blog: Slices", sent)
+        self.assertIn("Проверяй aliasing", sent)
 
     def test_rejects_code_source_ref_after_filtering(self) -> None:
         materials = TopicMaterials(
