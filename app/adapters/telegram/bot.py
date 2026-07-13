@@ -123,6 +123,9 @@ MENU_IDEAS = "menu_ideas"
 MENU_SETTINGS = "menu_settings"
 MENU_SCHEDULE = "menu_schedule"
 MENU_DUE = "menu_due"
+TOPIC_BLOCKS = "topic_blocks"
+TOPIC_BLOCK_PREFIX = "topic_block:"
+ABORT_TOPICS = "abort_topics"
 MENU_CANCEL_REVIEWS = "menu_cancel_reviews"
 MENU_STUDY_TOPICS = "menu_study_topics"
 MENU_TOPIC_ADD = "menu_topic_add"
@@ -643,6 +646,75 @@ async def topics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _show_topics(update, context, query=query)
 
 
+async def topic_blocks_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await _sync_materials_repo(context, "topic-blocks")
+    grouped = _all_topics_by_section(_services(context))
+    if not grouped:
+        await query.edit_message_text(
+            "<b>Темы</b>\n\nВ lk-prep пока нет тем.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await query.edit_message_text(
+        _topic_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_topic_block_keyboard(grouped),
+    )
+
+
+async def topic_block_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    raw_index = (query.data or "").removeprefix(TOPIC_BLOCK_PREFIX)
+    try:
+        index = int(raw_index)
+    except ValueError:
+        await query.edit_message_text("Не понял выбранный блок. Нажми «Темы» еще раз.")
+        return
+
+    grouped = _all_topics_by_section(_services(context))
+    sections = list(grouped.items())
+    if index < 0 or index >= len(sections):
+        await query.edit_message_text("Список блоков устарел. Нажми «Темы» еще раз.")
+        return
+
+    _, topics = sections[index]
+    await query.edit_message_text(
+        format_topics(topics),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_topic_section_keyboard(),
+    )
+
+
+async def abort_topics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer("Закрыто")
+    await query.edit_message_text("Список тем закрыт.")
+
+
 async def review_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _reject_non_owner(update, context):
         return
@@ -686,14 +758,30 @@ async def _show_topics(
     *,
     query: str = "",
 ) -> None:
+    if not query:
+        await _show_topic_blocks(update, context)
+        return
+
     services = _services(context)
     await _sync_materials_repo(context, "topics")
-    items = (
-        services.repo.search_topics(query, limit=30)
-        if query
-        else services.repo.list_topics()
-    )
+    items = services.repo.search_topics(query, limit=30)
     await _answer_long(update, format_topics(items))
+
+
+async def _show_topic_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    services = _services(context)
+    await _sync_materials_repo(context, "topic-blocks")
+    grouped = _all_topics_by_section(services)
+    if not grouped:
+        await _answer_long(update, "<b>Темы</b>\n\nВ lk-prep пока нет тем.")
+        return
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _topic_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_topic_block_keyboard(grouped),
+    )
 
 
 async def _send_section_menu(
@@ -1207,6 +1295,66 @@ def _ready_review_topics_by_section(services: AppServices) -> dict[str, list]:
     for topics in grouped.values():
         topics.sort(key=lambda item: (item.order_index or 10_000, item.title.lower()))
     return grouped
+
+
+def _all_topics_by_section(services: AppServices) -> dict[str, list]:
+    grouped: dict[str, list] = {}
+    for topic in services.repo.list_topics():
+        section = topic.section or "Без блока"
+        grouped.setdefault(section, []).append(topic)
+    for topics in grouped.values():
+        topics.sort(key=lambda item: (item.order_index or 10_000, item.title.lower()))
+    return grouped
+
+
+def _topic_blocks_text(grouped: dict[str, list]) -> str:
+    total = sum(len(topics) for topics in grouped.values())
+    ready_count = sum(
+        1
+        for topics in grouped.values()
+        for topic in topics
+        if topic.status == "ready"
+    )
+    planned_count = sum(
+        1
+        for topics in grouped.values()
+        for topic in topics
+        if topic.status == "planned"
+    )
+    lines = [
+        "<b>Темы</b>",
+        "",
+        f"Всего тем: <b>{total}</b>",
+        f"Готово: <b>{ready_count}</b> · В плане: <b>{planned_count}</b>",
+        "",
+        "Выбери блок.",
+    ]
+    return "\n".join(lines)
+
+
+def _topic_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, (section, topics) in enumerate(grouped.items()):
+        ready_count = sum(1 for topic in topics if topic.status == "ready")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{section} ({ready_count}/{len(topics)})"),
+                    callback_data=f"{TOPIC_BLOCK_PREFIX}{index}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_TOPICS)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _topic_section_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("К блокам", callback_data=TOPIC_BLOCKS)],
+            [InlineKeyboardButton("Закрыть", callback_data=ABORT_TOPICS)],
+        ]
+    )
 
 
 def _review_blocks_text(grouped: dict[str, list]) -> str:
@@ -5364,6 +5512,9 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CommandHandler("topic_ideas", topic_ideas))
     app.add_handler(CommandHandler("schedule", schedule))
     app.add_handler(CommandHandler("due", due))
+    app.add_handler(CallbackQueryHandler(topic_blocks_callback, pattern=f"^{TOPIC_BLOCKS}$"))
+    app.add_handler(CallbackQueryHandler(topic_block_callback, pattern=f"^{TOPIC_BLOCK_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(abort_topics_callback, pattern=f"^{ABORT_TOPICS}$"))
     app.add_handler(CallbackQueryHandler(review_add_blocks_callback, pattern=f"^{REVIEW_ADD_BLOCKS}$"))
     app.add_handler(CallbackQueryHandler(review_block_callback, pattern=f"^{REVIEW_BLOCK_PREFIX}"))
     app.add_handler(CallbackQueryHandler(review_topic_callback, pattern=f"^{REVIEW_TOPIC_PREFIX}"))
