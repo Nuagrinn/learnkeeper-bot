@@ -40,6 +40,10 @@ from app.adapters.telegram.formatters import (
     format_mistake_work_created,
     format_mistake_work_item,
     format_mistake_work_list,
+    format_open_question_check_report,
+    format_open_question_item,
+    format_open_question_list,
+    format_open_question_prompt,
     format_topic_inbox_created,
     format_topic_inbox_list,
     format_study_topic_prompt,
@@ -68,6 +72,10 @@ from app.features.llm_usage.service import (
 from app.features.mistake_work.agent import MistakeReviewAgentError, MistakeReviewInput
 from app.features.mistake_work.factory import build_mistake_review_agent
 from app.features.mistake_work.service import MistakeWorkService
+from app.features.open_questions.agent import OpenQuestionAgentError
+from app.features.open_questions.factory import build_open_question_agent
+from app.features.open_questions.models import OpenQuestion, OpenQuestionAttempt
+from app.features.open_questions.service import OpenQuestionService
 from app.features.quiz.factory import build_quiz_generator
 from app.features.quiz.generator import CODE_FILE_EXTENSIONS, MATERIAL_CHAR_LIMIT, QuizGenerationError
 from app.features.quiz.models import QuizQuestion, QuizSession
@@ -149,6 +157,15 @@ ABORT_EXPLAIN_CHECK = "abort_explain_check"
 EXPLAIN_CHECK_OPEN_PREFIX = "explain_check_open:"
 EXPLAIN_CHECK_DONE_PREFIX = "explain_check_done:"
 EXPLAIN_CHECK_DELETE_PREFIX = "explain_check_delete:"
+OPEN_QUESTION_BLOCKS = "open_question_blocks"
+OPEN_QUESTION_BLOCK_PREFIX = "open_question_block:"
+OPEN_QUESTION_TOPIC_PREFIX = "open_question_topic:"
+OPEN_QUESTION_FROM_QUIZ_PREFIX = "open_question_quiz:"
+OPEN_QUESTION_OPEN_PREFIX = "open_question_open:"
+OPEN_QUESTION_DELETE_PREFIX = "open_question_delete:"
+ABORT_OPEN_QUESTION = "abort_open_question"
+MENU_OPEN_QUESTIONS = "menu_open_questions"
+MENU_OPEN_QUESTIONS_ANSWERED = "menu_open_questions_answered"
 READ_MATERIAL_BLOCKS = "read_material_blocks"
 READ_MATERIAL_BLOCK_PREFIX = "read_material_block:"
 READ_MATERIAL_TOPIC_PREFIX = "read_material_topic:"
@@ -162,7 +179,7 @@ QUIZ_SIZE_DAILY_TOPIC = "daily_topic"
 BTN_TOPICS = "📚 Темы"
 BTN_READ_MATERIAL = "📖 Читать материал"
 BTN_REVIEW_MENU = "🔁 Повторы"
-BTN_TEST_MENU = "🧪 Тесты"
+BTN_TEST_MENU = "🎯 Тренировки"
 BTN_IDEAS_MENU = "🗂 Проработка"
 BTN_SETTINGS_MENU = "⚙️ Настройки"
 BTN_REVIEW_ADD = "➕ Добавить повтор"
@@ -182,6 +199,9 @@ BTN_EXPLAIN_CHECK = "🗣 Объяснить тему"
 BTN_EXPLAIN_CHECK_START = "▶️ Объяснить новую тему"
 BTN_EXPLAIN_CHECK_LIST = "📋 Мои объяснения"
 BTN_EXPLAIN_CHECK_DONE = "✅ Разобранные"
+BTN_OPEN_QUESTION = "🎯 Открытый вопрос"
+BTN_OPEN_QUESTION_LIST = "📋 Открытые вопросы"
+BTN_OPEN_QUESTION_ANSWERED = "✅ Проверенные ответы"
 BTN_SCHEDULE = "🗓 Расписание"
 BTN_DUE = "⏰ Пора повторять"
 BTN_HELP = "❔ Помощь"
@@ -189,6 +209,11 @@ LEGACY_MENU_BUTTONS = {
     "Темы",
     "Добавить повтор",
     "Пройти тест сейчас",
+    "Тесты",
+    "Тренировки",
+    "Открытый вопрос",
+    "Открытые вопросы",
+    "Проверенные ответы",
     "Ежедневные тесты",
     "Кодинг-репы",
     "Токены LLM",
@@ -236,6 +261,9 @@ MENU_BUTTONS = {
     BTN_EXPLAIN_CHECK_START,
     BTN_EXPLAIN_CHECK_LIST,
     BTN_EXPLAIN_CHECK_DONE,
+    BTN_OPEN_QUESTION,
+    BTN_OPEN_QUESTION_LIST,
+    BTN_OPEN_QUESTION_ANSWERED,
     BTN_SCHEDULE,
     BTN_DUE,
     BTN_HELP,
@@ -286,6 +314,15 @@ class AppServices:
         self.explain_check_agent = build_explain_check_agent(
             settings,
             usage_recorder=self.llm_usage,
+        )
+        self.open_questions = OpenQuestionService(
+            self.db,
+            self.repo,
+            build_open_question_agent(settings, usage_recorder=self.llm_usage),
+            pull_before_question=settings.repo_pull_before_quiz,
+            git_remote=settings.repo_git_remote,
+            git_branch=settings.repo_git_branch,
+            pull_timeout_seconds=settings.repo_pull_timeout_seconds,
         )
         self.speech = build_speech_to_text(settings)
         self.voice_dir = settings.voice_dir
@@ -589,8 +626,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"<b>{BTN_TOPICS}</b> - список тем из lk-prep\n"
         f"<b>{BTN_READ_MATERIAL}</b> - прислать материал темы файлом (Telegram сам красиво его отрендерит)\n"
         f"<b>{BTN_REVIEW_MENU}</b> - добавить, посмотреть или отменить повторы\n"
-        f"<b>{BTN_TEST_MENU}</b> - моментальные и ежедневные тесты\n"
-        f"<b>{BTN_IDEAS_MENU}</b> - идеи тем, отчеты по ошибкам, объяснить тему своими словами\n"
+        f"<b>{BTN_TEST_MENU}</b> - тесты, открытые вопросы и ежедневные тренировки\n"
+        f"<b>{BTN_IDEAS_MENU}</b> - идеи тем, отчеты по ошибкам и сохраненные разборы\n"
         f"<b>{BTN_SETTINGS_MENU}</b> - переключатели и статистика LLM\n\n"
         "Slash-команды тоже работают, если они удобнее: "
         "<code>/topics</code>, <code>/review_add</code>, "
@@ -686,8 +723,8 @@ async def _show_review_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def _show_tests_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_section_menu(
         update,
-        "🧪 Тесты",
-        "Быстрые тренировки без изменения расписания и ежедневный случайный тест.",
+        "🎯 Тренировки",
+        "Быстрые проверки без изменения расписания: A/B/C/D тесты, открытые вопросы и ежедневный случайный тест.",
         _tests_menu_keyboard(),
     )
 
@@ -696,7 +733,7 @@ async def _show_ideas_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await _send_section_menu(
         update,
         "🗂 Проработка",
-        "Inbox идей, будущие задачи и отдельная очередь отчетов после ошибок в тестах.",
+        "Inbox идей, отчеты после ошибок, открытые вопросы и сохраненные объяснения.",
         _ideas_menu_keyboard(),
     )
 
@@ -755,6 +792,8 @@ def _tests_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(BTN_INSTANT_QUIZ, callback_data=INSTANT_BLOCKS)],
+            [InlineKeyboardButton(BTN_OPEN_QUESTION, callback_data=OPEN_QUESTION_BLOCKS)],
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK, callback_data=MENU_EXPLAIN_CHECK)],
             [InlineKeyboardButton(BTN_DAILY_QUIZ, callback_data=MENU_DAILY_SETTINGS)],
         ]
     )
@@ -765,7 +804,8 @@ def _ideas_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(BTN_STUDY_TOPICS, callback_data=MENU_STUDY_TOPICS)],
             [InlineKeyboardButton(BTN_MISTAKE_WORK, callback_data=MENU_MISTAKE_WORK)],
-            [InlineKeyboardButton(BTN_EXPLAIN_CHECK, callback_data=MENU_EXPLAIN_CHECK)],
+            [InlineKeyboardButton(BTN_OPEN_QUESTION_LIST, callback_data=MENU_OPEN_QUESTIONS)],
+            [InlineKeyboardButton(BTN_EXPLAIN_CHECK_LIST, callback_data=MENU_EXPLAIN_CHECK_LIST)],
         ]
     )
 
@@ -787,6 +827,51 @@ def _explain_check_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(BTN_EXPLAIN_CHECK_DONE, callback_data=MENU_EXPLAIN_CHECK_DONE)],
         ]
     )
+
+
+def _open_question_list_keyboard(
+    items: list[OpenQuestion],
+    *,
+    show_answered_link: bool = True,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{item.topic_id} · {item.topic_title}"),
+                    callback_data=f"{OPEN_QUESTION_OPEN_PREFIX}{item.id}",
+                )
+            ]
+        )
+    if show_answered_link:
+        rows.append([InlineKeyboardButton("Проверенные", callback_data=MENU_OPEN_QUESTIONS_ANSWERED)])
+    else:
+        rows.append([InlineKeyboardButton("Без ответа", callback_data=MENU_OPEN_QUESTIONS)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _open_question_item_keyboard(item: OpenQuestion) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if item.status == "active":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "Ответить",
+                    callback_data=f"{OPEN_QUESTION_OPEN_PREFIX}{item.id}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "Удалить",
+                callback_data=f"{OPEN_QUESTION_DELETE_PREFIX}{item.id}",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton("К открытым вопросам", callback_data=MENU_OPEN_QUESTIONS)])
+    return InlineKeyboardMarkup(rows)
 
 
 def _mistake_work_menu_keyboard() -> InlineKeyboardMarkup:
@@ -915,6 +1000,32 @@ async def _show_mistake_work_done(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+async def _show_open_questions_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    items = _services(context).open_questions.list_active(limit=20)
+    if not update.message:
+        return
+    await update.message.reply_text(
+        format_open_question_list(items, status_title="Открытые вопросы без ответа"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_open_question_list_keyboard(items) if items else _main_keyboard(),
+    )
+
+
+async def _show_open_questions_answered(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    items = _services(context).open_questions.list_answered(limit=20)
+    if not update.message:
+        return
+    await update.message.reply_text(
+        format_open_question_list(items, status_title="Проверенные открытые вопросы"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=(
+            _open_question_list_keyboard(items, show_answered_link=False)
+            if items
+            else _main_keyboard()
+        ),
+    )
+
+
 async def _show_explain_check_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     items = _services(context).explain_check.list_active(limit=20)
     if not update.message:
@@ -1026,18 +1137,25 @@ def _mistake_report_keyboard(session_id: str) -> InlineKeyboardMarkup:
 
 
 def _quiz_report_keyboard(session_id: str, questions, answers) -> InlineKeyboardMarkup | None:
-    if not _mistake_questions(questions, answers):
-        return None
-    return InlineKeyboardMarkup(
+    rows: list[list[InlineKeyboardButton]] = [
         [
+            InlineKeyboardButton(
+                "Открытый вопрос",
+                callback_data=f"{OPEN_QUESTION_FROM_QUIZ_PREFIX}{session_id}",
+            )
+        ]
+    ]
+    if _mistake_questions(questions, answers):
+        rows.insert(
+            0,
             [
                 InlineKeyboardButton(
                     "Разобрать ошибки",
                     callback_data=f"{MISTAKE_REVIEW_PREFIX}{session_id}",
                 )
-            ]
-        ]
-    )
+            ],
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1354,6 +1472,25 @@ async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+async def _show_open_question_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _sync_materials_repo(context, "open-question-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await _answer_long(
+            update,
+            "<b>Открытый вопрос</b>\n\n"
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+        )
+        return
+    if not update.message:
+        return
+    await update.message.reply_text(
+        _open_question_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_open_question_block_keyboard(grouped),
+    )
+
+
 async def _show_explain_check_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _sync_materials_repo(context, "explain-check-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
@@ -1427,6 +1564,24 @@ def _instant_topics_text(section: str, topics: list) -> str:
     )
 
 
+def _open_question_blocks_text(grouped: dict[str, list]) -> str:
+    total = sum(len(topics) for topics in grouped.values())
+    return (
+        "<b>Открытый вопрос</b>\n\n"
+        f"Готовых тем: <b>{total}</b>\n"
+        "Выбери блок."
+    )
+
+
+def _open_question_topics_text(section: str, topics: list) -> str:
+    return (
+        "<b>Открытый вопрос</b>\n\n"
+        f"<b>{html.escape(section, quote=False)}</b>\n"
+        f"Тем: <b>{len(topics)}</b>\n\n"
+        "Выбери тему. Я сгенерирую один мини-кейс или открытый вопрос."
+    )
+
+
 def _instant_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, (section, topics) in enumerate(grouped.items()):
@@ -1439,6 +1594,21 @@ def _instant_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
             ]
         )
     rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_INSTANT_QUIZ)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _open_question_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for index, (section, topics) in enumerate(grouped.items()):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{section} ({len(topics)})"),
+                    callback_data=f"{OPEN_QUESTION_BLOCK_PREFIX}{index}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_OPEN_QUESTION)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1462,6 +1632,22 @@ def _instant_topic_keyboard(section_index: int, topics: list) -> InlineKeyboardM
         )
     rows.append([InlineKeyboardButton("К блокам", callback_data=INSTANT_BLOCKS)])
     rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_INSTANT_QUIZ)])
+    return InlineKeyboardMarkup(rows)
+
+
+def _open_question_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for topic in topics:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _button_label(f"{topic.id} · {topic.title}"),
+                    callback_data=f"{OPEN_QUESTION_TOPIC_PREFIX}{topic.id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("К блокам", callback_data=OPEN_QUESTION_BLOCKS)])
+    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_OPEN_QUESTION)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2080,6 +2266,63 @@ def _generation_wait_text(
     )
 
 
+def _open_question_wait_text(
+    *,
+    title: str,
+    action: str,
+    frame: str,
+    elapsed_seconds: int = 0,
+) -> str:
+    return (
+        f"{frame} <b>{html.escape(action, quote=False)}</b>\n\n"
+        f"Тема: {html.escape(title, quote=False)}\n"
+        f"Ожидание: {_format_wait_elapsed(elapsed_seconds)}\n\n"
+        "Агент читает материалы и рубрику, это может занять немного времени."
+    )
+
+
+async def _animate_open_question_message(query, *, title: str, action: str) -> None:
+    index = 0
+    started_at = perf_counter()
+    while True:
+        await asyncio.sleep(3)
+        index += 1
+        elapsed = int(perf_counter() - started_at)
+        if index == 1 or index % 4 == 0:
+            log.info("Open question still waiting action=%s title=%s elapsed=%ss", action, title, elapsed)
+        with contextlib.suppress(Exception):
+            await query.edit_message_text(
+                _open_question_wait_text(
+                    title=title,
+                    action=action,
+                    frame=GENERATION_FRAMES[index % len(GENERATION_FRAMES)],
+                    elapsed_seconds=elapsed,
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+
+async def _animate_open_question_reply_message(message, *, title: str, action: str) -> None:
+    index = 0
+    started_at = perf_counter()
+    while True:
+        await asyncio.sleep(3)
+        index += 1
+        elapsed = int(perf_counter() - started_at)
+        if index == 1 or index % 4 == 0:
+            log.info("Open question reply still waiting action=%s title=%s elapsed=%ss", action, title, elapsed)
+        with contextlib.suppress(Exception):
+            await message.edit_text(
+                _open_question_wait_text(
+                    title=title,
+                    action=action,
+                    frame=GENERATION_FRAMES[index % len(GENERATION_FRAMES)],
+                    elapsed_seconds=elapsed,
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+
+
 def _quiz_size_text(*, title: str, scope: str) -> str:
     return "\n".join(
         [
@@ -2315,6 +2558,32 @@ async def instant_blocks_callback(update: Update, context: ContextTypes.DEFAULT_
     await _edit_instant_blocks(query, context)
 
 
+async def open_question_blocks_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    await _sync_materials_repo(context, "open-question-blocks")
+    grouped = _ready_review_topics_by_section(_services(context))
+    if not grouped:
+        await query.edit_message_text(
+            "<b>Открытый вопрос</b>\n\n"
+            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await query.edit_message_text(
+        _open_question_blocks_text(grouped),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_open_question_block_keyboard(grouped),
+    )
+
+
 async def menu_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -2532,6 +2801,46 @@ async def mistake_work_delete_callback(update: Update, context: ContextTypes.DEF
         format_mistake_work_list(items, status_title="Активные отчеты"),
         parse_mode=ParseMode.HTML,
         reply_markup=_mistake_work_list_keyboard(items) if items else _mistake_work_menu_keyboard(),
+    )
+
+
+async def menu_open_questions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    items = _services(context).open_questions.list_active(limit=20)
+    await query.edit_message_text(
+        format_open_question_list(items, status_title="Открытые вопросы без ответа"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_open_question_list_keyboard(items) if items else _ideas_menu_keyboard(),
+    )
+
+
+async def menu_open_questions_answered_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    items = _services(context).open_questions.list_answered(limit=20)
+    await query.edit_message_text(
+        format_open_question_list(items, status_title="Проверенные открытые вопросы"),
+        parse_mode=ParseMode.HTML,
+        reply_markup=(
+            _open_question_list_keyboard(items, show_answered_link=False)
+            if items
+            else _ideas_menu_keyboard()
+        ),
     )
 
 
@@ -3082,6 +3391,244 @@ async def abort_instant_quiz_callback(update: Update, context: ContextTypes.DEFA
 
     await query.answer("Ок")
     await query.edit_message_text("Моментальный тест отменен.")
+
+
+async def open_question_block_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer()
+    raw_index = (query.data or "").removeprefix(OPEN_QUESTION_BLOCK_PREFIX)
+    try:
+        index = int(raw_index)
+    except ValueError:
+        await query.edit_message_text("Не понял выбранный блок. Нажми «Открытый вопрос» еще раз.")
+        return
+
+    grouped = _ready_review_topics_by_section(_services(context))
+    sections = list(grouped.items())
+    if index < 0 or index >= len(sections):
+        await query.edit_message_text("Список блоков устарел. Нажми «Открытый вопрос» еще раз.")
+        return
+
+    section, topics = sections[index]
+    await query.edit_message_text(
+        _open_question_topics_text(section, topics),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_open_question_topic_keyboard(topics),
+    )
+
+
+async def open_question_topic_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    services = _services(context)
+    topic_id = (query.data or "").removeprefix(OPEN_QUESTION_TOPIC_PREFIX).strip().lower()
+    topic = services.repo.get_topic(topic_id)
+    if not topic:
+        await query.answer("Тема не найдена.", show_alert=True)
+        return
+    await _generate_open_question_for_topic(query, context, topic.id, title=topic.title)
+
+
+async def open_question_from_quiz_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    session_id = (query.data or "").removeprefix(OPEN_QUESTION_FROM_QUIZ_PREFIX).strip()
+    services = _services(context)
+    try:
+        session = services.quiz.get_session(session_id)
+        questions = services.quiz.questions(session.id)
+        answers = services.quiz.answers(session.id)
+    except ValueError:
+        await query.answer("Сессия теста не найдена.", show_alert=True)
+        return
+
+    title = session.topic_title or str(session.material_snapshot.get("topic_title") or session.topic_id)
+    await query.answer("Генерирую вопрос")
+    await _safe_query_edit(
+        query,
+        _open_question_wait_text(title=title, action="Генерирую открытый вопрос", frame=GENERATION_FRAMES[0]),
+        parse_mode=ParseMode.HTML,
+    )
+    animation_task = asyncio.create_task(
+        _animate_open_question_message(query, title=title, action="Генерирую открытый вопрос")
+    )
+    try:
+        item = await asyncio.to_thread(
+            services.open_questions.generate_for_quiz,
+            session=session,
+            questions=questions,
+            answers=answers,
+        )
+    except (OpenQuestionAgentError, ValueError) as exc:
+        await _stop_animation_task(animation_task)
+        log.warning("Open question after quiz failed session_id=%s error=%s", session.id, exc)
+        await _safe_query_edit(
+            query,
+            _generation_error_text(
+                exc,
+                "<b>Не удалось сгенерировать открытый вопрос</b>\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}",
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    except Exception as exc:
+        await _stop_animation_task(animation_task)
+        log.exception("Open question after quiz failed unexpectedly session_id=%s", session.id)
+        await _safe_query_edit(
+            query,
+            "<b>Не удалось сгенерировать открытый вопрос</b>\n\n"
+            f"Причина: {html.escape(str(exc), quote=False)}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    finally:
+        await _stop_animation_task(animation_task)
+
+    context.user_data["awaiting_open_question_id"] = item.id
+    await _safe_query_edit(
+        query,
+        format_open_question_prompt(item),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _generate_open_question_for_topic(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    topic_id: str,
+    *,
+    title: str,
+) -> None:
+    services = _services(context)
+    await query.answer("Генерирую вопрос")
+    await _safe_query_edit(
+        query,
+        _open_question_wait_text(title=title, action="Генерирую открытый вопрос", frame=GENERATION_FRAMES[0]),
+        parse_mode=ParseMode.HTML,
+    )
+    animation_task = asyncio.create_task(
+        _animate_open_question_message(query, title=title, action="Генерирую открытый вопрос")
+    )
+    try:
+        item = await asyncio.to_thread(services.open_questions.generate_for_topic, topic_id)
+    except (OpenQuestionAgentError, ValueError) as exc:
+        await _stop_animation_task(animation_task)
+        log.warning("Open question generation failed topic_id=%s error=%s", topic_id, exc)
+        await _safe_query_edit(
+            query,
+            _generation_error_text(
+                exc,
+                "<b>Не удалось сгенерировать открытый вопрос</b>\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}",
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    except Exception as exc:
+        await _stop_animation_task(animation_task)
+        log.exception("Open question generation failed unexpectedly topic_id=%s", topic_id)
+        await _safe_query_edit(
+            query,
+            "<b>Не удалось сгенерировать открытый вопрос</b>\n\n"
+            f"Причина: {html.escape(str(exc), quote=False)}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    finally:
+        await _stop_animation_task(animation_task)
+
+    context.user_data["awaiting_open_question_id"] = item.id
+    await _safe_query_edit(
+        query,
+        format_open_question_prompt(item),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def open_question_open_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    question_id = (query.data or "").removeprefix(OPEN_QUESTION_OPEN_PREFIX).strip()
+    services = _services(context)
+    item = services.open_questions.get_question(question_id)
+    if not item:
+        await query.answer("Вопрос не найден.", show_alert=True)
+        return
+    attempt = services.open_questions.latest_attempt(item.id)
+    await query.answer()
+    if item.status == "active":
+        context.user_data["awaiting_open_question_id"] = item.id
+        await query.edit_message_text(
+            format_open_question_prompt(item),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await _send_long_preview(
+        query,
+        split_message(format_open_question_item(item, attempt)),
+        reply_markup=_open_question_item_keyboard(item),
+    )
+
+
+async def open_question_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+    question_id = (query.data or "").removeprefix(OPEN_QUESTION_DELETE_PREFIX).strip()
+    try:
+        item = _services(context).open_questions.delete_question(question_id)
+    except ValueError:
+        await query.answer("Вопрос не найден.", show_alert=True)
+        return
+    await query.answer("Удалено")
+    await query.edit_message_text(
+        "<b>Открытый вопрос удален</b>\n\n"
+        f"{html.escape(item.topic_title, quote=False)}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def abort_open_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+    context.user_data["awaiting_open_question_id"] = ""
+    await query.answer("Ок")
+    await query.edit_message_text("Открытый вопрос отменен.")
 
 
 async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4240,6 +4787,104 @@ async def _process_explanation_check(
             )
 
 
+async def _process_open_question_answer(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    question_id: str,
+    answer_text: str,
+    *,
+    source: str,
+) -> None:
+    if not update.message:
+        return
+    services = _services(context)
+    item = services.open_questions.get_question(question_id)
+    if not item:
+        await _answer_long(update, "Открытый вопрос уже не найден. Создай новый вопрос.")
+        return
+    if item.status != "active":
+        attempt = services.open_questions.latest_attempt(item.id)
+        await _answer_long(update, format_open_question_item(item, attempt))
+        return
+
+    wait_message = await update.message.reply_text(
+        _open_question_wait_text(
+            title=item.topic_title,
+            action="Проверяю открытый ответ",
+            frame=GENERATION_FRAMES[0],
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    animation_task = asyncio.create_task(
+        _animate_open_question_reply_message(
+            wait_message,
+            title=item.topic_title,
+            action="Проверяю открытый ответ",
+        )
+    )
+    log.info(
+        "Open question answer queued question_id=%s topic_id=%s source=%s answer_len=%s",
+        item.id,
+        item.topic_id,
+        source,
+        len(answer_text),
+    )
+    try:
+        question, attempt = await asyncio.to_thread(
+            services.open_questions.check_answer,
+            item.id,
+            answer_text,
+            answer_source=source,
+        )
+    except (OpenQuestionAgentError, ValueError) as exc:
+        await _stop_animation_task(animation_task)
+        log.warning("Open question check failed question_id=%s error=%s", item.id, exc)
+        await _finish_explain_check_message(
+            update,
+            wait_message,
+            _generation_error_text(
+                exc,
+                "<b>Не удалось проверить открытый ответ</b>\n\n"
+                f"Причина: {html.escape(str(exc), quote=False)}",
+            ),
+        )
+        return
+    except Exception as exc:
+        await _stop_animation_task(animation_task)
+        log.exception("Open question check failed unexpectedly question_id=%s", item.id)
+        await _finish_explain_check_message(
+            update,
+            wait_message,
+            "<b>Не удалось проверить открытый ответ</b>\n\n"
+            f"Причина: {html.escape(str(exc), quote=False)}",
+        )
+        return
+    finally:
+        await _stop_animation_task(animation_task)
+
+    log.info(
+        "Open question checked question_id=%s score=%.1f layer=%s",
+        question.id,
+        attempt.score_percent,
+        attempt.layer_reached,
+    )
+    chunks = split_message(format_open_question_check_report(question, attempt))
+    last = len(chunks) - 1
+    await _finish_explain_check_message(
+        update,
+        wait_message,
+        chunks[0],
+        reply_markup=_open_question_item_keyboard(question) if last == 0 else None,
+    )
+    for index in range(1, len(chunks)):
+        with contextlib.suppress(Exception):
+            await update.message.reply_text(
+                chunks[index],
+                parse_mode=ParseMode.HTML,
+                reply_markup=_open_question_item_keyboard(question) if index == last else None,
+            )
+
+
 def _voice_audio_path(services: AppServices, file_id: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     token = "".join(ch if ch.isalnum() else "-" for ch in file_id)[:16] or "voice"
@@ -4257,7 +4902,8 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     awaiting_review = bool(context.user_data.get("awaiting_review_topic"))
     awaiting_study = bool(context.user_data.get("awaiting_study_topic"))
     awaiting_explanation_topic_id = str(context.user_data.get("awaiting_explanation_topic_id") or "")
-    if awaiting_review and not awaiting_study and not awaiting_explanation_topic_id:
+    awaiting_open_question_id = str(context.user_data.get("awaiting_open_question_id") or "")
+    if awaiting_review and not awaiting_study and not awaiting_explanation_topic_id and not awaiting_open_question_id:
         context.user_data["awaiting_review_topic"] = False
         log.info(
             "Voice message rejected for review flow duration=%s file_id=%s",
@@ -4270,7 +4916,7 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f"Открой <b>{BTN_REVIEW_MENU}</b> → <b>{BTN_REVIEW_ADD}</b>, затем выбери блок и тему кнопками.",
         )
         return
-    if not awaiting_review and not awaiting_study and not awaiting_explanation_topic_id:
+    if not awaiting_review and not awaiting_study and not awaiting_explanation_topic_id and not awaiting_open_question_id:
         log.info(
             "Voice message rejected outside command flow duration=%s file_id=%s",
             voice.duration,
@@ -4281,8 +4927,9 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "Голосовое не обработал: сейчас я не жду команду.\n\n"
             "Распознавание не запускал, чтобы не делать лишнюю работу.\n"
             f"Для повтора открой <b>{BTN_REVIEW_MENU}</b>.\n"
-            f"Голосом сейчас можно пользоваться после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_TOPIC_ADD}</b> "
-            f"или после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_EXPLAIN_CHECK}</b>.",
+            f"Голосом сейчас можно пользоваться после <b>{BTN_IDEAS_MENU}</b> → <b>{BTN_TOPIC_ADD}</b>, "
+            f"после <b>{BTN_TEST_MENU}</b> → <b>{BTN_OPEN_QUESTION}</b> "
+            f"или после <b>{BTN_TEST_MENU}</b> → <b>{BTN_EXPLAIN_CHECK}</b>.",
         )
         return
 
@@ -4356,6 +5003,7 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = ""
     context.user_data["awaiting_explanation_then_task_id"] = ""
+    context.user_data["awaiting_open_question_id"] = ""
     await _edit_or_reply(
         update,
         wait_message,
@@ -4372,6 +5020,14 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             query,
             source="voice",
             follow_up_task_id=follow_up_task_id,
+        )
+    elif awaiting_open_question_id:
+        await _process_open_question_answer(
+            update,
+            context,
+            awaiting_open_question_id,
+            query,
+            source="voice",
         )
     else:
         await _show_review_blocks(update, context)
@@ -4394,6 +5050,7 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _create_topic_inbox_item(update, context, text, source="text_after_button")
         return
     awaiting_explanation_topic_id = str(context.user_data.get("awaiting_explanation_topic_id") or "")
+    awaiting_open_question_id = str(context.user_data.get("awaiting_open_question_id") or "")
     if awaiting_explanation_topic_id and text not in MENU_BUTTONS:
         follow_up_task_id = str(context.user_data.get("awaiting_explanation_then_task_id") or "")
         context.user_data["awaiting_explanation_topic_id"] = ""
@@ -4407,11 +5064,22 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             follow_up_task_id=follow_up_task_id,
         )
         return
+    if awaiting_open_question_id and text not in MENU_BUTTONS:
+        context.user_data["awaiting_open_question_id"] = ""
+        await _process_open_question_answer(
+            update,
+            context,
+            awaiting_open_question_id,
+            text,
+            source="text",
+        )
+        return
 
     context.user_data["awaiting_review_topic"] = False
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = ""
     context.user_data["awaiting_explanation_then_task_id"] = ""
+    context.user_data["awaiting_open_question_id"] = ""
     if text in (BTN_TOPICS, "Темы"):
         await _show_topics(update, context)
         return
@@ -4421,7 +5089,7 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if text == BTN_REVIEW_MENU:
         await _show_review_menu(update, context)
         return
-    if text == BTN_TEST_MENU:
+    if text in (BTN_TEST_MENU, "Тесты", "Тренировки"):
         await _show_tests_menu(update, context)
         return
     if text in (BTN_IDEAS_MENU, "Идеи"):
@@ -4442,6 +5110,9 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if text in (BTN_INSTANT_QUIZ, "Пройти тест сейчас"):
         await _show_instant_blocks(update, context)
+        return
+    if text in (BTN_OPEN_QUESTION, "Открытый вопрос"):
+        await _show_open_question_blocks(update, context)
         return
     if text in (BTN_DAILY_QUIZ, "Ежедневные тесты"):
         await _show_daily_quiz_settings(update, context)
@@ -4470,6 +5141,12 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if text in (BTN_MISTAKE_WORK_DONE, "Проработанные"):
         await _show_mistake_work_done(update, context)
+        return
+    if text in (BTN_OPEN_QUESTION_LIST, "Открытые вопросы"):
+        await _show_open_questions_active(update, context)
+        return
+    if text in (BTN_OPEN_QUESTION_ANSWERED, "Проверенные ответы"):
+        await _show_open_questions_answered(update, context)
         return
     if text in (BTN_EXPLAIN_CHECK_START, "Объяснить новую тему"):
         await _show_explain_check_blocks(update, context)
@@ -4708,6 +5385,13 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(menu_topic_inbox_callback, pattern=f"^{MENU_TOPIC_INBOX}$"))
     app.add_handler(CallbackQueryHandler(menu_mistake_work_callback, pattern=f"^{MENU_MISTAKE_WORK}$"))
     app.add_handler(CallbackQueryHandler(menu_mistake_work_done_callback, pattern=f"^{MENU_MISTAKE_WORK_DONE}$"))
+    app.add_handler(CallbackQueryHandler(menu_open_questions_callback, pattern=f"^{MENU_OPEN_QUESTIONS}$"))
+    app.add_handler(
+        CallbackQueryHandler(
+            menu_open_questions_answered_callback,
+            pattern=f"^{MENU_OPEN_QUESTIONS_ANSWERED}$",
+        )
+    )
     app.add_handler(CallbackQueryHandler(menu_explain_check_callback, pattern=f"^{MENU_EXPLAIN_CHECK}$"))
     app.add_handler(CallbackQueryHandler(menu_explain_check_list_callback, pattern=f"^{MENU_EXPLAIN_CHECK_LIST}$"))
     app.add_handler(CallbackQueryHandler(menu_explain_check_done_callback, pattern=f"^{MENU_EXPLAIN_CHECK_DONE}$"))
@@ -4740,6 +5424,13 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(instant_block_callback, pattern=f"^{INSTANT_BLOCK_PREFIX}"))
     app.add_handler(CallbackQueryHandler(instant_topic_callback, pattern=f"^{INSTANT_TOPIC_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_instant_quiz_callback, pattern=f"^{ABORT_INSTANT_QUIZ}$"))
+    app.add_handler(CallbackQueryHandler(open_question_blocks_callback, pattern=f"^{OPEN_QUESTION_BLOCKS}$"))
+    app.add_handler(CallbackQueryHandler(open_question_block_callback, pattern=f"^{OPEN_QUESTION_BLOCK_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_topic_callback, pattern=f"^{OPEN_QUESTION_TOPIC_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_from_quiz_callback, pattern=f"^{OPEN_QUESTION_FROM_QUIZ_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_open_callback, pattern=f"^{OPEN_QUESTION_OPEN_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_delete_callback, pattern=f"^{OPEN_QUESTION_DELETE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(abort_open_question_callback, pattern=f"^{ABORT_OPEN_QUESTION}$"))
     app.add_handler(CallbackQueryHandler(quiz_size_callback, pattern=f"^{QUIZ_SIZE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_quiz_size_callback, pattern=f"^{ABORT_QUIZ_SIZE}$"))
     app.add_handler(CallbackQueryHandler(start_review_callback, pattern=f"^{START_REVIEW_PREFIX}"))

@@ -69,10 +69,16 @@ class MaterialMetadata:
     source_role: str = ""
     source_refs: list[str] = field(default_factory=list)
     prompt_helper: str = ""
+    challenge_helper: str = ""
 
     @property
     def has_guidance(self) -> bool:
-        return bool(self.source_role or self.source_refs or self.prompt_helper)
+        return bool(
+            self.source_role
+            or self.source_refs
+            or self.prompt_helper
+            or self.challenge_helper
+        )
 
 
 @dataclass(frozen=True)
@@ -545,15 +551,19 @@ def _parse_lk_frontmatter(frontmatter: str) -> MaterialMetadata:
     source_role = ""
     source_refs: list[str] = []
     prompt_helper_lines: list[str] = []
+    challenge_helper_lines: list[str] = []
     mode = ""
 
     for raw_line in lk_lines:
         stripped = raw_line.strip()
-        if mode == "prompt_helper":
+        if mode in ("prompt_helper", "challenge_helper"):
             if _is_lk_key_line(raw_line):
                 mode = ""
             else:
-                prompt_helper_lines.append(_strip_lk_indent(raw_line))
+                if mode == "prompt_helper":
+                    prompt_helper_lines.append(_strip_lk_indent(raw_line))
+                else:
+                    challenge_helper_lines.append(_strip_lk_indent(raw_line))
                 continue
 
         if mode == "source_refs":
@@ -582,12 +592,21 @@ def _parse_lk_frontmatter(frontmatter: str) -> MaterialMetadata:
                 mode = "prompt_helper"
                 continue
             prompt_helper_lines.append(_clean_yaml_scalar(value))
+            continue
+        if stripped.startswith("challenge_helper:"):
+            value = stripped.split(":", 1)[1].strip()
+            if value in ("|", ">"):
+                mode = "challenge_helper"
+                continue
+            challenge_helper_lines.append(_clean_yaml_scalar(value))
 
     prompt_helper = "\n".join(prompt_helper_lines).strip()
+    challenge_helper = "\n".join(challenge_helper_lines).strip()
     return MaterialMetadata(
         source_role=source_role.strip(),
         source_refs=[ref for ref in source_refs if ref],
         prompt_helper=prompt_helper,
+        challenge_helper=challenge_helper,
     )
 
 

@@ -583,6 +583,7 @@ def _material_metadata_snapshot(file: TopicMaterial) -> dict[str, object]:
         "source_role": metadata.source_role,
         "source_refs": metadata.source_refs,
         "prompt_helper_hash": _prompt_helper_hash(metadata.prompt_helper),
+        "challenge_helper_hash": _prompt_helper_hash(metadata.challenge_helper),
     }
 
 

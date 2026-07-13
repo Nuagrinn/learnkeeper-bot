@@ -9,6 +9,7 @@ from app.features.explain_check.models import ExplanationCheck
 from app.features.llm_usage.models import LlmUsageStats
 from app.features.mistake_work.agent import MistakeReviewResult
 from app.features.mistake_work.models import MistakeWorkItem
+from app.features.open_questions.models import OpenQuestion, OpenQuestionAttempt
 from app.features.quiz.models import QuizAnswer, QuizQuestion, QuizSession
 from app.features.review_tasks.models import ReviewTask
 from app.features.review_tasks.service import TopicNotReadyError
@@ -370,6 +371,26 @@ def _explain_check_status_label(status: str) -> str:
     return labels.get(status, status)
 
 
+def _open_question_status_label(status: str) -> str:
+    labels = {
+        "active": "ждет ответа",
+        "answered": "проверен",
+        "deleted": "удален",
+    }
+    return labels.get(status, status)
+
+
+def _question_kind_label(kind: str) -> str:
+    labels = {
+        "mini_case": "мини-кейс",
+        "code_review": "code review",
+        "design_tradeoff": "design trade-off",
+        "debugging": "debugging",
+        "oral_interview": "устный вопрос",
+    }
+    return labels.get(kind, kind or "открытый вопрос")
+
+
 def format_explain_check_created(item: ExplanationCheck) -> str:
     return "\n".join(
         [
@@ -452,6 +473,124 @@ def format_explain_check_report(item: ExplanationCheck) -> str:
         if item.agent_model:
             provider = f"{provider} {item.agent_model}"
         lines.extend(["", f"<b>Agent:</b> <code>{_h(provider)}</code>"])
+    return "\n".join(lines)
+
+
+def format_open_question_prompt(item: OpenQuestion) -> str:
+    lines = [
+        "<b>Открытый вопрос</b>",
+        "",
+        f"<b>Тема:</b> {_h(item.topic_title)}",
+    ]
+    if item.section:
+        lines.append(f"<b>Блок:</b> {_h(item.section)}")
+    lines.extend(
+        [
+            f"<b>Формат:</b> {_h(_question_kind_label(item.question_kind))}",
+            "",
+            _h(_clip(item.question_text, 1800)),
+        ]
+    )
+    if item.answer_format_hint:
+        lines.extend(["", f"<i>{_h(_clip_inline(item.answer_format_hint, 400))}</i>"])
+    lines.extend(
+        [
+            "",
+            "Ответь следующим сообщением текстом или голосом. Я проверю по рубрике.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_open_question_check_report(
+    question: OpenQuestion,
+    attempt: OpenQuestionAttempt,
+) -> str:
+    lines = [
+        "<b>Открытый вопрос проверен</b>",
+        "",
+        f"<b>Тема:</b> {_h(question.topic_title)}",
+        f"<b>Оценка:</b> <code>{attempt.score_percent:.0f}%</code>",
+        f"<b>Слой:</b> {_h(_layer_label(attempt.layer_reached))}",
+        f"<b>Коротко:</b> {_h(_clip_inline(attempt.summary, 500))}",
+    ]
+    if attempt.strong_points:
+        lines.extend(["", "<b>Что получилось</b>"])
+        lines.extend(f"- {_h(item)}" for item in attempt.strong_points[:8])
+    if attempt.missing_points:
+        lines.extend(["", "<b>Что упущено</b>"])
+        lines.extend(f"- {_h(item)}" for item in attempt.missing_points[:8])
+    if attempt.false_models:
+        lines.extend(["", "<b>Ложные модели → верные модели</b>"])
+        for pair in attempt.false_models[:6]:
+            false_model = str(pair.get("false_model") or "").strip()
+            correct_model = str(pair.get("correct_model") or "").strip()
+            if not false_model:
+                continue
+            lines.append(f"- ❌ {_h(_clip_inline(false_model, 220))}")
+            if correct_model:
+                lines.append(f"  ✅ {_h(_clip_inline(correct_model, 220))}")
+    if attempt.better_answer:
+        lines.extend(["", "<b>Как мог бы звучать сильный ответ</b>", _h(_clip(attempt.better_answer, 1400))])
+    if attempt.next_drill:
+        lines.extend(["", "<b>Следующая мини-тренировка</b>", _h(_clip_inline(attempt.next_drill, 500))])
+    lines.extend(["", "<b>Твой ответ</b>", _h(_clip(attempt.answer_text, 1000))])
+    if attempt.checker_provider:
+        provider = attempt.checker_provider
+        if attempt.checker_model:
+            provider = f"{provider} {attempt.checker_model}"
+        lines.extend(["", f"<b>Agent:</b> <code>{_h(provider)}</code>"])
+    return "\n".join(lines)
+
+
+def format_open_question_list(
+    items: list[OpenQuestion],
+    *,
+    status_title: str = "Открытые вопросы",
+) -> str:
+    if not items:
+        return f"<b>{_h(status_title)}</b>\n\nСписок пуст."
+    lines = [
+        f"<b>{_h(status_title)}</b>",
+        f"Всего: <b>{len(items)}</b>",
+        "",
+    ]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"<b>{index}.</b> {_h(item.topic_title)}")
+        lines.append(f"<b>Формат:</b> {_h(_question_kind_label(item.question_kind))}")
+        lines.append(f"<b>Статус:</b> {_h(_open_question_status_label(item.status))}")
+        lines.append(f"<b>Создан:</b> <code>{item.created_at:%d-%m-%Y}</code>")
+        lines.append(f"ID: <code>{_h(item.id)}</code>")
+        lines.append("")
+    lines.append("Открой вопрос кнопкой ниже, чтобы ответить, прочитать проверку или удалить.")
+    return "\n".join(lines).strip()
+
+
+def format_open_question_item(
+    item: OpenQuestion,
+    attempt: OpenQuestionAttempt | None = None,
+) -> str:
+    if attempt:
+        return format_open_question_check_report(item, attempt)
+    lines = [
+        "<b>Открытый вопрос</b>",
+        "",
+        f"<b>Тема:</b> {_h(item.topic_title)}",
+        f"<b>Статус:</b> {_h(_open_question_status_label(item.status))}",
+        f"<b>Формат:</b> {_h(_question_kind_label(item.question_kind))}",
+    ]
+    if item.section:
+        lines.append(f"<b>Блок:</b> {_h(item.section)}")
+    lines.extend(
+        [
+            f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
+            f"<b>ID:</b> <code>{_h(item.id)}</code>",
+            "",
+            _h(_clip(item.question_text, 1800)),
+        ]
+    )
+    if item.answer_format_hint:
+        lines.extend(["", f"<i>{_h(_clip_inline(item.answer_format_hint, 400))}</i>"])
     return "\n".join(lines)
 
 

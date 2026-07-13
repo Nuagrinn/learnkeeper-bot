@@ -555,7 +555,7 @@ def _material_guidance_lines(files: list[TopicMaterial]) -> list[str]:
     lines: list[str] = []
     for file in files:
         metadata = file.metadata
-        if not metadata.has_guidance:
+        if not (metadata.source_role or metadata.source_refs or metadata.prompt_helper):
             continue
         lines.append(f"--- BEGIN GUIDANCE {file.source_path} ---")
         if metadata.source_role:

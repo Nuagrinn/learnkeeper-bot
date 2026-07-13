@@ -17,6 +17,9 @@ from app.features.llm_usage.service import (
     LlmUsageService,
 )
 from app.features.materials.mtproto import MaterialMtprotoError, MaterialMtprotoSender
+from app.features.open_questions.agent import OpenQuestionAgentError
+from app.features.open_questions.factory import build_open_question_agent
+from app.features.open_questions.service import OpenQuestionService
 from app.features.quiz.factory import build_quiz_generator
 from app.features.quiz.generator import QuizGenerationError
 from app.features.review_tasks.service import ReviewTaskService, TopicNotReadyError
@@ -86,6 +89,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     quiz_preview.add_argument("topic", help="Topic title or search query")
     quiz_preview.add_argument("--questions", type=int, default=None)
+
+    open_question_preview = sub.add_parser(
+        "open-question-preview",
+        help="Generate and save one open-ended question for a topic",
+    )
+    open_question_preview.add_argument("topic", help="Topic id/title/search query")
+
+    open_question_check = sub.add_parser(
+        "open-question-check",
+        help="Check an answer for a saved open-ended question",
+    )
+    open_question_check.add_argument("question_id")
+    open_question_check.add_argument("--answer", required=True, help="Answer text to check")
 
     sub.add_parser("stt-status", help="Show local speech-to-text configuration")
 
@@ -467,6 +483,12 @@ def main(argv: list[str] | None = None) -> None:
                 if len(preview) > 180:
                     preview = preview[:177].rstrip() + "..."
                 print(f"- prompt_helper_preview: {preview}")
+            print(f"- challenge_helper_chars: {len(metadata.challenge_helper)}")
+            if metadata.challenge_helper:
+                preview = metadata.challenge_helper.replace("\n", " ")
+                if len(preview) > 180:
+                    preview = preview[:177].rstrip() + "..."
+                print(f"- challenge_helper_preview: {preview}")
             print()
         return
 
@@ -504,6 +526,99 @@ def main(argv: list[str] | None = None) -> None:
             print(f"   Explanation: {question.explanation}")
             print(f"   Sources: {', '.join(question.source_refs)}")
             print()
+        return
+
+    if args.command == "open-question-preview":
+        settings = load_settings(db_path=args.db, repo_path=args.repo)
+        db = Database(settings.db_path)
+        db.migrate()
+        repo = RepoService(settings.lk_prep_path)
+        topic = repo.resolve_topic(args.topic)
+        llm_usage = _build_llm_usage_service(settings)
+        service = OpenQuestionService(
+            db,
+            repo,
+            build_open_question_agent(settings, usage_recorder=llm_usage),
+            pull_before_question=settings.repo_pull_before_quiz,
+            git_remote=settings.repo_git_remote,
+            git_branch=settings.repo_git_branch,
+            pull_timeout_seconds=settings.repo_pull_timeout_seconds,
+        )
+        try:
+            question = service.generate_for_topic(topic.id)
+        except (OpenQuestionAgentError, ValueError) as exc:
+            print(f"Open question generation failed: {exc}")
+            return
+        print(f"ID: {question.id}")
+        print(f"Provider: {question.generator_provider} {question.generator_model}".strip())
+        print(f"Topic: {question.topic_id} | {question.topic_title}")
+        print(f"Kind: {question.question_kind}")
+        print()
+        print(question.question_text)
+        if question.answer_format_hint:
+            print()
+            print(f"Answer format: {question.answer_format_hint}")
+        if question.expected_points:
+            print()
+            print("Expected points:")
+            for item in question.expected_points:
+                print(f"- {item}")
+        if question.source_refs:
+            print()
+            print(f"Sources: {', '.join(question.source_refs)}")
+        return
+
+    if args.command == "open-question-check":
+        settings = load_settings(db_path=args.db, repo_path=args.repo)
+        db = Database(settings.db_path)
+        db.migrate()
+        repo = RepoService(settings.lk_prep_path)
+        llm_usage = _build_llm_usage_service(settings)
+        service = OpenQuestionService(
+            db,
+            repo,
+            build_open_question_agent(settings, usage_recorder=llm_usage),
+            pull_before_question=settings.repo_pull_before_quiz,
+            git_remote=settings.repo_git_remote,
+            git_branch=settings.repo_git_branch,
+            pull_timeout_seconds=settings.repo_pull_timeout_seconds,
+        )
+        try:
+            question, attempt = service.check_answer(
+                args.question_id,
+                args.answer,
+                answer_source="cli",
+            )
+        except (OpenQuestionAgentError, ValueError) as exc:
+            print(f"Open question check failed: {exc}")
+            return
+        print(f"Topic: {question.topic_id} | {question.topic_title}")
+        print(f"Score: {attempt.score_percent:.0f}%")
+        print(f"Layer: {attempt.layer_reached}/4")
+        print()
+        print(attempt.summary)
+        if attempt.strong_points:
+            print()
+            print("Strong points:")
+            for item in attempt.strong_points:
+                print(f"- {item}")
+        if attempt.missing_points:
+            print()
+            print("Missing points:")
+            for item in attempt.missing_points:
+                print(f"- {item}")
+        if attempt.false_models:
+            print()
+            print("False models:")
+            for item in attempt.false_models:
+                print(f"- {item.get('false_model')} -> {item.get('correct_model')}")
+        if attempt.better_answer:
+            print()
+            print("Better answer:")
+            print(attempt.better_answer)
+        if attempt.next_drill:
+            print()
+            print(f"Next drill: {attempt.next_drill}")
         return
 
     parser.error(f"Unknown command: {args.command}")

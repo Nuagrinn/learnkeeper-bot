@@ -84,6 +84,8 @@ lk:
     - "Go Memory Model"
   prompt_helper: |
     Проверяй не определение, а понимание happens-before и race detector.
+  challenge_helper: |
+    Дай короткий code review кейс на поиск data race.
 ---
 
 # Data race в Go
@@ -101,6 +103,7 @@ lk:
         self.assertEqual("primary_source_artifact", material.metadata.source_role)
         self.assertEqual(["Go Memory Model"], material.metadata.source_refs)
         self.assertIn("happens-before", material.metadata.prompt_helper)
+        self.assertIn("code review", material.metadata.challenge_helper)
         self.assertTrue(material.content.startswith("# Data race"))
         self.assertNotIn("source_role", material.content)
 

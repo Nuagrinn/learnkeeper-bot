@@ -89,6 +89,9 @@ class Settings:
     explain_check_agent_provider: str
     explain_check_agent_model: str
     explain_check_agent_timeout_seconds: int
+    open_question_agent_provider: str
+    open_question_agent_model: str
+    open_question_agent_timeout_seconds: int
 
 
 def load_settings(db_path: str | None = None, repo_path: str | None = None) -> Settings:
@@ -349,6 +352,23 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         explain_check_agent_timeout_seconds = max(30, int(raw_explain_check_agent_timeout))
     except ValueError:
         explain_check_agent_timeout_seconds = 180
+    open_question_default_provider = "claude_cli" if claude_code_oauth_token else "fake"
+    open_question_agent_provider = (
+        os.getenv("OPEN_QUESTION_AGENT_PROVIDER")
+        or env_file.get("OPEN_QUESTION_AGENT_PROVIDER", open_question_default_provider)
+    ).strip().lower()
+    open_question_agent_model = (
+        os.getenv("OPEN_QUESTION_AGENT_MODEL")
+        or env_file.get("OPEN_QUESTION_AGENT_MODEL", claude_model)
+    ).strip()
+    raw_open_question_agent_timeout = (
+        os.getenv("OPEN_QUESTION_AGENT_TIMEOUT_SECONDS")
+        or env_file.get("OPEN_QUESTION_AGENT_TIMEOUT_SECONDS", "240")
+    )
+    try:
+        open_question_agent_timeout_seconds = max(30, int(raw_open_question_agent_timeout))
+    except ValueError:
+        open_question_agent_timeout_seconds = 240
 
     return Settings(
         db_path=resolved_db,
@@ -408,6 +428,9 @@ def load_settings(db_path: str | None = None, repo_path: str | None = None) -> S
         explain_check_agent_provider=explain_check_agent_provider,
         explain_check_agent_model=explain_check_agent_model,
         explain_check_agent_timeout_seconds=explain_check_agent_timeout_seconds,
+        open_question_agent_provider=open_question_agent_provider,
+        open_question_agent_model=open_question_agent_model,
+        open_question_agent_timeout_seconds=open_question_agent_timeout_seconds,
     )
 
 
