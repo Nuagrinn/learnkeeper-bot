@@ -14,7 +14,7 @@ from pathlib import Path
 # explicitly instead.
 DISALLOWED_AGENT_TOOLS = (
     "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch,"
-    "Task,NotebookEdit,TodoWrite,MultiEdit,BashOutput,KillShell"
+    "Task,NotebookEdit,TodoWrite,BashOutput,KillShell"
 )
 
 
