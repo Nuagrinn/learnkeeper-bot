@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from typing import Protocol
@@ -481,6 +483,8 @@ def _build_claude_system_prompt() -> str:
         "самодостаточный сниппет прямо в текст вопроса, не требуя вспоминать код из "
         "материалов по памяти;\n"
         "- source_refs содержит только пути из ALLOWED_SOURCE_REFS.\n"
+        "- correct_index должен быть распределен по 0, 1, 2, 3 без постоянного "
+        "перекоса в 0 или 1; избегай длинных серий одной и той же позиции.\n"
     )
 
 
@@ -493,7 +497,8 @@ def _build_claude_user_prompt(topic: RepoTopic, question_count: int) -> str:
         "Требования: каждый вопрос должен проверять понимание, а не узнавание "
         "формулировок; 4 варианта ответа; ровно один правильный; неправильные "
         "варианты правдоподобные; explanation кратко объясняет правильный ответ; "
-        "source_refs содержит только пути файлов из материалов.\n"
+        "source_refs содержит только пути файлов из материалов; правильные ответы "
+        "должны быть распределены между A/B/C/D, а не почти всегда попадать в A/B.\n"
         "Миксуй вопросы на понимание концепций с задачами вида «что выведет этот код» "
         "и «что делает этот фрагмент»: если вопрос про код, приводи короткий "
         "самодостаточный сниппет прямо в тексте вопроса, чтобы отвечать можно было "
@@ -504,7 +509,7 @@ def _build_claude_user_prompt(topic: RepoTopic, question_count: int) -> str:
         "    {\n"
         '      "text": "текст вопроса",\n'
         '      "options": ["A", "B", "C", "D"],\n'
-        '      "correct_index": 0,\n'
+        '      "correct_index": 2,\n'
         '      "explanation": "почему этот ответ правильный",\n'
         '      "source_refs": ["path/to/source.md"]\n'
         "    }\n"
@@ -746,7 +751,49 @@ def _questions_from_payload(
         )
         _validate_question_shape(question)
         questions.append(question)
-    return questions
+    return _balance_correct_option_positions(questions)
+
+
+def _balance_correct_option_positions(questions: list[GeneratedQuestion]) -> list[GeneratedQuestion]:
+    if len(questions) <= 1:
+        return questions
+
+    seed = _question_shuffle_seed(questions)
+    rng = random.Random(seed)
+    targets: list[int] = []
+    while len(targets) < len(questions):
+        block = [0, 1, 2, 3]
+        rng.shuffle(block)
+        targets.extend(block)
+
+    return [
+        _move_correct_option(question, target_index)
+        for question, target_index in zip(questions, targets, strict=False)
+    ]
+
+
+def _question_shuffle_seed(questions: list[GeneratedQuestion]) -> int:
+    parts: list[str] = []
+    for question in questions:
+        parts.append(question.text)
+        parts.extend(question.options)
+        parts.append(str(question.correct_index))
+    digest = sha256("\n\x1f\n".join(parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _move_correct_option(question: GeneratedQuestion, target_index: int) -> GeneratedQuestion:
+    if question.correct_index == target_index:
+        return question
+
+    correct_option = question.options[question.correct_index]
+    options = [
+        option
+        for index, option in enumerate(question.options)
+        if index != question.correct_index
+    ]
+    options.insert(target_index, correct_option)
+    return replace(question, options=options, correct_index=target_index)
 
 
 def _normalize_ref(value: object) -> str:

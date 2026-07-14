@@ -164,6 +164,7 @@ OPEN_QUESTION_BLOCKS = "open_question_blocks"
 OPEN_QUESTION_BLOCK_PREFIX = "open_question_block:"
 OPEN_QUESTION_TOPIC_PREFIX = "open_question_topic:"
 OPEN_QUESTION_FROM_QUIZ_PREFIX = "open_question_quiz:"
+OPEN_QUESTION_SKIP_PREFIX = "open_question_skip:"
 OPEN_QUESTION_OPEN_PREFIX = "open_question_open:"
 OPEN_QUESTION_DELETE_PREFIX = "open_question_delete:"
 ABORT_OPEN_QUESTION = "abort_open_question"
@@ -1224,18 +1225,16 @@ def _mistake_report_keyboard(session_id: str) -> InlineKeyboardMarkup:
     )
 
 
-def _quiz_report_keyboard(session_id: str, questions, answers) -> InlineKeyboardMarkup | None:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                "Открытый вопрос",
-                callback_data=f"{OPEN_QUESTION_FROM_QUIZ_PREFIX}{session_id}",
-            )
-        ]
-    ]
+def _quiz_report_keyboard(
+    session_id: str,
+    questions,
+    answers,
+    *,
+    include_open_question: bool = True,
+) -> InlineKeyboardMarkup | None:
+    rows: list[list[InlineKeyboardButton]] = []
     if _mistake_questions(questions, answers):
-        rows.insert(
-            0,
+        rows.append(
             [
                 InlineKeyboardButton(
                     "Разобрать ошибки",
@@ -1243,7 +1242,20 @@ def _quiz_report_keyboard(session_id: str, questions, answers) -> InlineKeyboard
                 )
             ],
         )
-    return InlineKeyboardMarkup(rows)
+    if include_open_question:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "Открытый вопрос",
+                    callback_data=f"{OPEN_QUESTION_FROM_QUIZ_PREFIX}{session_id}",
+                ),
+                InlineKeyboardButton(
+                    "Пропустить",
+                    callback_data=f"{OPEN_QUESTION_SKIP_PREFIX}{session_id}",
+                ),
+            ]
+        )
+    return InlineKeyboardMarkup(rows) if rows else None
 
 
 async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3660,6 +3672,37 @@ async def open_question_from_quiz_callback(update: Update, context: ContextTypes
     )
 
 
+async def open_question_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    session_id = (query.data or "").removeprefix(OPEN_QUESTION_SKIP_PREFIX).strip()
+    services = _services(context)
+    try:
+        questions = services.quiz.questions(session_id)
+        answers = services.quiz.answers(session_id)
+    except ValueError:
+        await query.answer("Сессия теста не найдена.", show_alert=True)
+        return
+
+    context.user_data["awaiting_open_question_id"] = ""
+    await query.answer("Открытый вопрос пропущен")
+    with contextlib.suppress(BadRequest):
+        await query.edit_message_reply_markup(
+            reply_markup=_quiz_report_keyboard(
+                session_id,
+                questions,
+                answers,
+                include_open_question=False,
+            )
+        )
+
+
 async def _generate_open_question_for_topic(
     query,
     context: ContextTypes.DEFAULT_TYPE,
@@ -5579,6 +5622,7 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(open_question_block_callback, pattern=f"^{OPEN_QUESTION_BLOCK_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_topic_callback, pattern=f"^{OPEN_QUESTION_TOPIC_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_from_quiz_callback, pattern=f"^{OPEN_QUESTION_FROM_QUIZ_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_skip_callback, pattern=f"^{OPEN_QUESTION_SKIP_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_open_callback, pattern=f"^{OPEN_QUESTION_OPEN_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_delete_callback, pattern=f"^{OPEN_QUESTION_DELETE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_open_question_callback, pattern=f"^{ABORT_OPEN_QUESTION}$"))

@@ -208,6 +208,45 @@ class ClaudeCliQuizGeneratorTest(unittest.TestCase):
 
         self.assertEqual("Что делает append?", questions[0].text)
 
+    def test_balances_correct_answer_positions_after_generation(self) -> None:
+        payload = {
+            "questions": [
+                {
+                    "text": f"Вопрос {index}",
+                    "options": [
+                        f"правильно {index}",
+                        f"неверно {index}.1",
+                        f"неверно {index}.2",
+                        f"неверно {index}.3",
+                    ],
+                    "correct_index": 0,
+                    "explanation": "Пояснение.",
+                    "source_refs": ["base-go/slices.md"],
+                }
+                for index in range(8)
+            ]
+        }
+        generator = ClaudeCliQuizGenerator(
+            oauth_token="oauth-token",
+            run_command=RecordingRunner(json.dumps(payload, ensure_ascii=False)),
+            allow_paid_api=False,
+        )
+
+        questions = generator.generate(
+            topic=self.topic,
+            materials=self.materials,
+            question_count=8,
+        )
+
+        counts = [0, 0, 0, 0]
+        for index, question in enumerate(questions):
+            counts[question.correct_index] += 1
+            self.assertEqual(
+                f"правильно {index}",
+                question.options[question.correct_index],
+            )
+        self.assertEqual([2, 2, 2, 2], counts)
+
     def test_reports_structured_output_denial(self) -> None:
         wrapper = {
             "type": "result",

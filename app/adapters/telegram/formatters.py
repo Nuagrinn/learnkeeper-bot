@@ -232,16 +232,16 @@ def format_mistake_review_preview(report: MistakeReviewResult) -> str:
     ]
     if report.section:
         lines.append(f"<b>Блок:</b> {_h(report.section)}")
-    lines.extend(["", f"<b>Коротко:</b> {_h(_clip_inline(report.summary, 700))}"])
+    lines.extend(["", f"<b>Коротко:</b> {_rich_inline(_clip_inline(report.summary, 700))}"])
     if report.diagnosis:
-        lines.extend(["", "<b>Диагноз</b>", _h(_clip(report.diagnosis, 1200))])
+        lines.extend(["", "<b>Диагноз</b>", _rich(_clip(report.diagnosis, 1200))])
     if report.weak_concepts:
         lines.extend(["", "<b>Что подтянуть</b>"])
-        lines.extend(f"- {_h(item)}" for item in report.weak_concepts[:8])
+        lines.extend(f"- {_rich_inline(item)}" for item in report.weak_concepts[:8])
     suggestion = report.material_suggestion
     details = str(suggestion.get("details") or "").strip()
     if details:
-        lines.extend(["", "<b>Что потом добавить в lk-prep</b>", _h(_clip(details, 700))])
+        lines.extend(["", "<b>Что потом добавить в lk-prep</b>", _rich(_clip(details, 700))])
     if report.questions_to_revisit:
         lines.extend(["", "<b>Вопросы для повторной проверки</b>"])
         for item in report.questions_to_revisit[:5]:
@@ -249,11 +249,11 @@ def format_mistake_review_preview(report: MistakeReviewResult) -> str:
             missed = str(item.get("missed_point") or "").strip()
             correct = str(item.get("correct_idea") or "").strip()
             practice = str(item.get("practice_prompt") or "").strip()
-            lines.append(f"<b>{_h(number)}.</b> {_h(_clip_inline(missed, 400))}")
+            lines.append(f"<b>{_h(number)}.</b> {_rich_inline(_clip_inline(missed, 400))}")
             if correct:
-                lines.append(f"Верная идея: {_h(_clip(correct, 350))}")
+                lines.append(f"Верная идея: {_rich(_clip(correct, 350))}")
             if practice:
-                lines.append(f"Практика: <i>{_h(_clip(practice, 250))}</i>")
+                lines.append(f"Практика: <i>{_rich_inline(_clip_inline(practice, 250))}</i>")
     lines.extend(
         [
             "",
@@ -316,17 +316,17 @@ def format_mistake_work_item(item: MistakeWorkItem) -> str:
             f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
             f"<b>ID:</b> <code>{_h(item.id)}</code>",
             "",
-            f"<b>Коротко:</b> {_h(item.summary)}",
+            f"<b>Коротко:</b> {_rich_inline(item.summary)}",
         ]
     )
     if item.diagnosis:
-        lines.extend(["", "<b>Диагноз</b>", _h(_clip(item.diagnosis, 1200))])
+        lines.extend(["", "<b>Диагноз</b>", _rich(_clip(item.diagnosis, 1200))])
     if item.weak_concepts:
         lines.extend(["", "<b>Что подтянуть</b>"])
-        lines.extend(f"- {_h(concept)}" for concept in item.weak_concepts[:12])
+        lines.extend(f"- {_rich_inline(concept)}" for concept in item.weak_concepts[:12])
     details = str(item.suggestion.get("details") or "").strip()
     if details:
-        lines.extend(["", "<b>Что добавить/усилить в lk-prep</b>", _h(_clip(details, 700))])
+        lines.extend(["", "<b>Что добавить/усилить в lk-prep</b>", _rich(_clip(details, 700))])
     revisit = item.report.get("questions_to_revisit")
     if isinstance(revisit, list) and revisit:
         lines.extend(["", "<b>Вопросы для повторной проверки</b>"])
@@ -337,11 +337,11 @@ def format_mistake_work_item(item: MistakeWorkItem) -> str:
             missed = str(raw.get("missed_point") or "").strip()
             correct = str(raw.get("correct_idea") or "").strip()
             practice = str(raw.get("practice_prompt") or "").strip()
-            lines.append(f"<b>{_h(number)}.</b> {_h(_clip_inline(missed, 400))}")
+            lines.append(f"<b>{_h(number)}.</b> {_rich_inline(_clip_inline(missed, 400))}")
             if correct:
-                lines.append(f"Верная идея: {_h(_clip(correct, 350))}")
+                lines.append(f"Верная идея: {_rich(_clip(correct, 350))}")
             if practice:
-                lines.append(f"Практика: <i>{_h(_clip(practice, 250))}</i>")
+                lines.append(f"Практика: <i>{_rich_inline(_clip_inline(practice, 250))}</i>")
     if item.agent_provider:
         provider = item.agent_provider
         if item.agent_model:
@@ -446,15 +446,15 @@ def format_explain_check_report(item: ExplanationCheck) -> str:
             f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
             f"<b>ID:</b> <code>{_h(item.id)}</code>",
             "",
-            f"<b>Коротко:</b> {_h(_clip_inline(item.summary, 400))}",
+            f"<b>Коротко:</b> {_rich_inline(_clip_inline(item.summary, 400))}",
         ]
     )
     if item.covered_concepts:
         lines.extend(["", "<b>Что точно объяснил</b>"])
-        lines.extend(f"- {_h(concept)}" for concept in item.covered_concepts[:8])
+        lines.extend(f"- {_rich_inline(concept)}" for concept in item.covered_concepts[:8])
     if item.missing_concepts:
         lines.extend(["", "<b>Что упустил</b>"])
-        lines.extend(f"- {_h(concept)}" for concept in item.missing_concepts[:8])
+        lines.extend(f"- {_rich_inline(concept)}" for concept in item.missing_concepts[:8])
     if item.false_models:
         lines.extend(["", "<b>Ложные модели → верные модели</b>"])
         for pair in item.false_models[:6]:
@@ -462,12 +462,12 @@ def format_explain_check_report(item: ExplanationCheck) -> str:
             correct_model = str(pair.get("correct_model") or "").strip()
             if not false_model:
                 continue
-            lines.append(f"- ❌ {_h(_clip_inline(false_model, 200))}")
+            lines.append(f"- ❌ {_rich_inline(_clip_inline(false_model, 200))}")
             if correct_model:
-                lines.append(f"  ✅ {_h(_clip_inline(correct_model, 200))}")
+                lines.append(f"  ✅ {_rich_inline(_clip_inline(correct_model, 200))}")
     if item.follow_up_question:
-        lines.extend(["", "<b>Вопрос на подумать</b>", _h(_clip_inline(item.follow_up_question, 300))])
-    lines.extend(["", "<b>Твое объяснение</b>", _h(_clip(item.explanation_text, 1200))])
+        lines.extend(["", "<b>Вопрос на подумать</b>", _rich_inline(_clip_inline(item.follow_up_question, 300))])
+    lines.extend(["", "<b>Твое объяснение</b>", _rich(_clip(item.explanation_text, 1200))])
     if item.agent_provider:
         provider = item.agent_provider
         if item.agent_model:
@@ -488,11 +488,11 @@ def format_open_question_prompt(item: OpenQuestion) -> str:
         [
             f"<b>Формат:</b> {_h(_question_kind_label(item.question_kind))}",
             "",
-            _h(_clip(item.question_text, 1800)),
+            _rich(_clip(item.question_text, 1800)),
         ]
     )
     if item.answer_format_hint:
-        lines.extend(["", f"<i>{_h(_clip_inline(item.answer_format_hint, 400))}</i>"])
+        lines.extend(["", f"<i>{_rich_inline(_clip_inline(item.answer_format_hint, 400))}</i>"])
     lines.extend(
         [
             "",
@@ -512,14 +512,14 @@ def format_open_question_check_report(
         f"<b>Тема:</b> {_h(question.topic_title)}",
         f"<b>Оценка:</b> <code>{attempt.score_percent:.0f}%</code>",
         f"<b>Слой:</b> {_h(_layer_label(attempt.layer_reached))}",
-        f"<b>Коротко:</b> {_h(_clip_inline(attempt.summary, 500))}",
+        f"<b>Коротко:</b> {_rich_inline(_clip_inline(attempt.summary, 500))}",
     ]
     if attempt.strong_points:
         lines.extend(["", "<b>Что получилось</b>"])
-        lines.extend(f"- {_h(item)}" for item in attempt.strong_points[:8])
+        lines.extend(f"- {_rich_inline(item)}" for item in attempt.strong_points[:8])
     if attempt.missing_points:
         lines.extend(["", "<b>Что упущено</b>"])
-        lines.extend(f"- {_h(item)}" for item in attempt.missing_points[:8])
+        lines.extend(f"- {_rich_inline(item)}" for item in attempt.missing_points[:8])
     if attempt.false_models:
         lines.extend(["", "<b>Ложные модели → верные модели</b>"])
         for pair in attempt.false_models[:6]:
@@ -527,14 +527,14 @@ def format_open_question_check_report(
             correct_model = str(pair.get("correct_model") or "").strip()
             if not false_model:
                 continue
-            lines.append(f"- ❌ {_h(_clip_inline(false_model, 220))}")
+            lines.append(f"- ❌ {_rich_inline(_clip_inline(false_model, 220))}")
             if correct_model:
-                lines.append(f"  ✅ {_h(_clip_inline(correct_model, 220))}")
+                lines.append(f"  ✅ {_rich_inline(_clip_inline(correct_model, 220))}")
     if attempt.better_answer:
-        lines.extend(["", "<b>Как мог бы звучать сильный ответ</b>", _h(_clip(attempt.better_answer, 1400))])
+        lines.extend(["", "<b>Как мог бы звучать сильный ответ</b>", _rich(_clip(attempt.better_answer, 1400))])
     if attempt.next_drill:
-        lines.extend(["", "<b>Следующая мини-тренировка</b>", _h(_clip_inline(attempt.next_drill, 500))])
-    lines.extend(["", "<b>Твой ответ</b>", _h(_clip(attempt.answer_text, 1000))])
+        lines.extend(["", "<b>Следующая мини-тренировка</b>", _rich_inline(_clip_inline(attempt.next_drill, 500))])
+    lines.extend(["", "<b>Твой ответ</b>", _rich(_clip(attempt.answer_text, 1000))])
     if attempt.checker_provider:
         provider = attempt.checker_provider
         if attempt.checker_model:
@@ -586,11 +586,11 @@ def format_open_question_item(
             f"<b>Дата:</b> <code>{item.created_at:%d-%m-%Y}</code>",
             f"<b>ID:</b> <code>{_h(item.id)}</code>",
             "",
-            _h(_clip(item.question_text, 1800)),
+            _rich(_clip(item.question_text, 1800)),
         ]
     )
     if item.answer_format_hint:
-        lines.extend(["", f"<i>{_h(_clip_inline(item.answer_format_hint, 400))}</i>"])
+        lines.extend(["", f"<i>{_rich_inline(_clip_inline(item.answer_format_hint, 400))}</i>"])
     return "\n".join(lines)
 
 
@@ -926,14 +926,18 @@ def _h(value: object) -> str:
 
 _CODE_FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_MARKDOWN_HEADING_RE = re.compile(r"^([ \t]{0,3})#{1,6}[ \t]+(.+?)\s*$")
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*|__([^_\n]+)__")
+_MARKDOWN_ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)|(?<!_)_([^_\n]+)_(?!_)")
 
 
 def _rich(value: object) -> str:
-    """Render LLM text with Markdown code into Telegram HTML.
+    """Render common LLM Markdown into Telegram HTML.
 
-    Messages are sent with parse_mode=HTML, so backticks are not special: without
-    this a model-written ```go ... ``` fence shows up verbatim. Fenced blocks
-    become <pre>, inline `code` becomes <code>, everything else is HTML-escaped.
+    Messages are sent with parse_mode=HTML, so Markdown is not special: without
+    this a model-written ```go ... ``` fence or **bold** marker shows verbatim.
+    Fenced blocks become <pre>, inline `code` becomes <code>, simple Markdown
+    emphasis/headings become Telegram HTML, everything else is HTML-escaped.
     """
     text = str(value)
     if not text:
@@ -954,7 +958,7 @@ def _rich(value: object) -> str:
 
 
 def _rich_inline(segment: str) -> str:
-    """Escape text and turn inline `code` spans into <code> (no block tags).
+    """Escape text and render inline Markdown (no block tags).
 
     Safe to nest inside other inline tags like <i>, unlike the block <pre> that
     full _rich() can emit.
@@ -962,11 +966,43 @@ def _rich_inline(segment: str) -> str:
     parts: list[str] = []
     idx = 0
     for match in _INLINE_CODE_RE.finditer(segment):
-        parts.append(_h(segment[idx:match.start()]))
+        parts.append(_rich_plain(segment[idx:match.start()]))
         parts.append(f"<code>{_h(match.group(1))}</code>")
         idx = match.end()
-    parts.append(_h(segment[idx:]))
+    parts.append(_rich_plain(segment[idx:]))
     return "".join(parts)
+
+
+def _rich_plain(segment: str) -> str:
+    lines: list[str] = []
+    for chunk in segment.splitlines(keepends=True):
+        body = chunk
+        newline = ""
+        if chunk.endswith("\r\n"):
+            body = chunk[:-2]
+            newline = "\r\n"
+        elif chunk.endswith("\n"):
+            body = chunk[:-1]
+            newline = "\n"
+        elif chunk.endswith("\r"):
+            body = chunk[:-1]
+            newline = "\r"
+
+        heading = _MARKDOWN_HEADING_RE.match(body)
+        if heading:
+            text = re.sub(r"[ \t]+#+[ \t]*$", "", heading.group(2)).strip()
+            lines.append(f"{_h(heading.group(1))}<b>{_rich_markdown_inline(text)}</b>{newline}")
+            continue
+
+        lines.append(_rich_markdown_inline(body) + newline)
+    return "".join(lines)
+
+
+def _rich_markdown_inline(text: str) -> str:
+    rendered = _h(text)
+    rendered = _MARKDOWN_BOLD_RE.sub(lambda match: f"<b>{match.group(1) or match.group(2)}</b>", rendered)
+    rendered = _MARKDOWN_ITALIC_RE.sub(lambda match: f"<i>{match.group(1) or match.group(2)}</i>", rendered)
+    return rendered
 
 
 def _clip(value: str, limit: int) -> str:

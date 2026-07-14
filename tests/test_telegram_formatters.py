@@ -15,6 +15,8 @@ from app.adapters.telegram.formatters import (
     format_mistake_review_preview,
     format_mistake_work_item,
     format_mistake_work_list,
+    format_open_question_check_report,
+    format_open_question_prompt,
     format_review_created,
     format_review_creation_started,
     format_topics,
@@ -26,6 +28,7 @@ from app.features.llm_usage.models import LlmFeatureUsage, LlmUsageStats
 from app.features.explain_check.models import ExplanationCheck
 from app.features.mistake_work.agent import MistakeReviewResult
 from app.features.mistake_work.models import MistakeWorkItem
+from app.features.open_questions.models import OpenQuestion, OpenQuestionAttempt
 from app.features.quiz.models import QuizAnswer, QuizQuestion, QuizSession
 from app.features.review_tasks.models import ReviewTask
 from app.adapters.telegram.formatters import format_task, format_tasks
@@ -399,6 +402,107 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertIn("len(string) считает символы", report_text)
         self.assertIn("len(string) считает байты UTF-8", report_text)
         self.assertIn("Что выведет", report_text)
+
+    def test_format_open_question_prompt_renders_markdown(self) -> None:
+        item = OpenQuestion(
+            id="oq1",
+            topic_id="db05",
+            topic_title="Модели данных",
+            section="Базы данных",
+            quiz_session_id="s1",
+            origin="instant",
+            status="active",
+            question_kind="mini_case",
+            question_text=(
+                "### Мини-кейс\n\n"
+                "Выбери **document model** или `relational`.\n\n"
+                "```sql\nSELECT * FROM users;\n```"
+            ),
+            answer_format_hint="Ответь **структурой**: тезис → trade-off.",
+            expected_points=["workload fit"],
+            rubric=[{"criterion": "trade-off", "weight": 3}],
+            source_refs=["database/review.md"],
+            material_fingerprint="fp",
+            material_snapshot={},
+            generator_provider="fake",
+            generator_model="fake",
+            generate_prompt_version="fake",
+            created_at=datetime(2026, 7, 14, 10, 0),
+            updated_at=datetime(2026, 7, 14, 10, 0),
+        )
+
+        text = format_open_question_prompt(item)
+
+        self.assertIn("<b>Мини-кейс</b>", text)
+        self.assertIn("<b>document model</b>", text)
+        self.assertIn("<code>relational</code>", text)
+        self.assertIn('<pre><code class="language-sql">', text)
+        self.assertIn("SELECT * FROM users;", text)
+        self.assertIn("<b>структурой</b>", text)
+        self.assertNotIn("###", text)
+        self.assertNotIn("**", text)
+        self.assertNotIn("```", text)
+
+    def test_format_open_question_check_report_renders_markdown(self) -> None:
+        question = OpenQuestion(
+            id="oq1",
+            topic_id="db05",
+            topic_title="Модели данных",
+            section="Базы данных",
+            quiz_session_id="s1",
+            origin="instant",
+            status="answered",
+            question_kind="mini_case",
+            question_text="Вопрос",
+            answer_format_hint="",
+            expected_points=[],
+            rubric=[],
+            source_refs=["database/review.md"],
+            material_fingerprint="fp",
+            material_snapshot={},
+            generator_provider="fake",
+            generator_model="fake",
+            generate_prompt_version="fake",
+            created_at=datetime(2026, 7, 14, 10, 0),
+            updated_at=datetime(2026, 7, 14, 10, 0),
+        )
+        attempt = OpenQuestionAttempt(
+            id="a1",
+            open_question_id="oq1",
+            answer_text="Я выбрал `document`.",
+            answer_source="text",
+            score_percent=72,
+            layer_reached=3,
+            summary="Хорошо понял **локальность**, но не раскрыл связи.",
+            strong_points=["Указал `workload`"],
+            missing_points=["Не объяснил **many-to-many**"],
+            false_models=[
+                {
+                    "false_model": "**schema-on-read** значит без схемы",
+                    "correct_model": "Схема есть, но применяется при `read`",
+                }
+            ],
+            better_answer="### Сильный ответ\nDocument подходит, если читаем агрегат целиком.",
+            next_drill="Объясни `join` vs document locality.",
+            should_create_mistake_work=True,
+            checker_provider="fake",
+            checker_model="fake",
+            check_prompt_version="fake",
+            raw_report={},
+            created_at=datetime(2026, 7, 14, 10, 5),
+        )
+
+        text = format_open_question_check_report(question, attempt)
+
+        self.assertIn("<b>локальность</b>", text)
+        self.assertIn("<code>workload</code>", text)
+        self.assertIn("<b>many-to-many</b>", text)
+        self.assertIn("<b>schema-on-read</b>", text)
+        self.assertIn("<code>read</code>", text)
+        self.assertIn("<b>Сильный ответ</b>", text)
+        self.assertIn("<code>document</code>", text)
+        self.assertNotIn("###", text)
+        self.assertNotIn("**", text)
 
     def test_long_explain_check_report_stays_within_telegram_limit(self) -> None:
         item = ExplanationCheck(
