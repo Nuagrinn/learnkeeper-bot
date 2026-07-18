@@ -109,6 +109,11 @@ class ReviewTaskService:
                 material_fingerprint=repo_topic.material_fingerprint,
                 tags=repo_topic.tags,
                 source_paths=repo_topic.source_paths,
+                kind=repo_topic.kind,
+                parent_id=repo_topic.parent_id,
+                parent_title=repo_topic.parent_title,
+                catalog_path=repo_topic.catalog_path,
+                trainable=repo_topic.trainable,
             ),
             now=now,
         )
@@ -139,7 +144,30 @@ class ReviewTaskService:
             f"{topic.id} | {topic.title}"
             for topic in self._suggest_ready_topics(query, matches=matches)
         ]
-        if not matches or matches[0].score < MIN_TOPIC_MATCH_SCORE:
+        topic = next(
+            (
+                match
+                for match in matches
+                if match.score >= MIN_TOPIC_MATCH_SCORE
+                and match.status == "ready"
+                and match.trainable
+            ),
+            None,
+        )
+        if not topic:
+            close_match = next(
+                (match for match in matches if match.score >= MIN_TOPIC_MATCH_SCORE),
+                None,
+            )
+            if close_match and not self.repo.get_topic_materials(close_match).files:
+                raise TopicNotReadyError(
+                    query,
+                    reason=(
+                        f"Тема \"{close_match.title}\" найдена, но к ней пока не привязаны "
+                        "читаемые материалы."
+                    ),
+                    suggestions=suggestions,
+                )
             raise TopicNotReadyError(
                 query,
                 reason=(
@@ -149,7 +177,6 @@ class ReviewTaskService:
                 suggestions=suggestions,
             )
 
-        topic = matches[0]
         materials = self.repo.get_topic_materials(topic)
         if not materials.files:
             raise TopicNotReadyError(
@@ -170,6 +197,15 @@ class ReviewTaskService:
                 reason=f"Тема с id \"{topic_id}\" не найдена в lk-prep.",
                 suggestions=[],
             )
+        if topic.status != "ready" or not topic.trainable:
+            raise TopicNotReadyError(
+                topic_id,
+                reason=(
+                    f"Тема \"{topic.title}\" найдена, но она не является готовой "
+                    "тренировочной темой."
+                ),
+                suggestions=[],
+            )
         materials = self.repo.get_topic_materials(topic)
         if not materials.files:
             raise TopicNotReadyError(
@@ -188,15 +224,15 @@ class ReviewTaskService:
         for topic in matches:
             if topic.id in seen:
                 continue
+            if topic.status != "ready" or not topic.trainable:
+                continue
             if self.repo.get_topic_materials(topic).files:
                 suggestions.append(topic)
                 seen.add(topic.id)
-        for topic in self.repo.list_topics():
+        for topic in self.repo.list_trainable_topics():
             if len(suggestions) >= 5:
                 break
             if topic.id in seen:
-                continue
-            if not self.repo.get_topic_materials(topic).files:
                 continue
             suggestions.append(topic)
             seen.add(topic.id)
@@ -303,9 +339,10 @@ class ReviewTaskService:
                 INSERT INTO topics (
                     id, title, status, tags_json, source_paths_json,
                     last_seen_commit, section, order_index, material_fingerprint,
+                    kind, parent_id, parent_title, catalog_path, trainable,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     status = excluded.status,
@@ -314,6 +351,11 @@ class ReviewTaskService:
                     section = excluded.section,
                     order_index = excluded.order_index,
                     material_fingerprint = excluded.material_fingerprint,
+                    kind = excluded.kind,
+                    parent_id = excluded.parent_id,
+                    parent_title = excluded.parent_title,
+                    catalog_path = excluded.catalog_path,
+                    trainable = excluded.trainable,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -326,6 +368,11 @@ class ReviewTaskService:
                     topic.section,
                     topic.order_index,
                     topic.material_fingerprint,
+                    topic.kind,
+                    topic.parent_id,
+                    topic.parent_title,
+                    topic.catalog_path,
+                    1 if topic.trainable else 0,
                     stamp,
                     stamp,
                 ),

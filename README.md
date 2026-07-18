@@ -30,7 +30,8 @@ mistake review backlog and a first VPS deployment kit.
   fallback when `ALLOW_PAID_API=false`.
 - SQL migrations.
 - Local `lk-prep` topic lookup from `ROOT.md`, optional `topics.json`,
-  and markdown files.
+  nested catalog indexes such as `books/*/index.md`, and markdown fallback
+  for simple repos without `ROOT.md`.
 - Topic statistics contract: `section`, `order_index`, `material_fingerprint`.
 - Topic inbox for new study ideas: Telegram text/voice -> lightweight agent
   normalizes the title/block -> SQLite backlog. `lk-prep` is updated
@@ -89,6 +90,27 @@ python -m app.cli --repo "C:\Users\Vladislav\Desktop\lk-prep" review-add "Python
 
 Or copy `.env.example` to `.env` and fill `LK_PREP_PATH`.
 
+## lk-prep catalog model
+
+LearnKeeper treats `lk-prep` as a small catalog graph, not only as a flat
+`ROOT.md` table.
+
+- `ROOT.md` is still the public entry point.
+- Rows that point to an index file, for example `books/ddia/index.md`, become
+  navigation nodes (`kind=book` or `kind=index`) and are not used for quizzes.
+- Supported nested index tables can expose child learning units. The first
+  supported shape is a book chapter table with columns like
+  `Topic id`, `Глава`, `Разбор`, `Материал`, `Статус`.
+- Child rows become normal trainable topics, for example `DB10` under
+  `Книги / DDIA`, while preserving stable ids for review tasks and statistics.
+- Quiz and open-question agents receive catalog context (`topic_kind`,
+  `parent_title`, `catalog_path`) together with material frontmatter metadata.
+
+Only `trainable=true` and `status=ready` topics with readable material enter
+reviews, daily quizzes, instant quizzes, open questions, explain-checks and
+"Читать материал". Markdown fallback files are trainable only when the repo has
+no `ROOT.md`; in real `lk-prep` they are diagnostic, not quiz sources.
+
 New study topic ideas are captured into SQLite through Telegram:
 `🗂 Проработка` -> `💡 Темы на изучение`. The bot no longer writes new topics
 into `lk-prep`; move inbox items into the materials repo manually while
@@ -113,6 +135,9 @@ app/core/migrations/
   011_coding_reps.sql
   012_explanation_checks.sql
   013_explanation_check_review_link.sql
+  014_daily_quiz_offers.sql
+  015_open_questions.sql
+  016_catalog_topic_fields.sql
 ```
 
 Apply pending migrations with:

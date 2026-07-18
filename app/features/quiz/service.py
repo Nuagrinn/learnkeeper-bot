@@ -157,8 +157,8 @@ class QuizService:
         self._sync_repo()
         topics = [
             topic
-            for topic in self.repo.list_topics()
-            if topic.section == clean_section and topic.status == "ready"
+            for topic in self.repo.list_trainable_topics()
+            if topic.section == clean_section
         ]
         files: list[TopicMaterial] = []
         paths: list[str] = []
@@ -378,9 +378,10 @@ class QuizService:
                 INSERT INTO topics (
                     id, title, status, tags_json, source_paths_json,
                     last_seen_commit, section, order_index, material_fingerprint,
+                    kind, parent_id, parent_title, catalog_path, trainable,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     status = excluded.status,
@@ -389,6 +390,11 @@ class QuizService:
                     section = excluded.section,
                     order_index = excluded.order_index,
                     material_fingerprint = excluded.material_fingerprint,
+                    kind = excluded.kind,
+                    parent_id = excluded.parent_id,
+                    parent_title = excluded.parent_title,
+                    catalog_path = excluded.catalog_path,
+                    trainable = excluded.trainable,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -401,6 +407,11 @@ class QuizService:
                     topic.section,
                     topic.order_index,
                     topic.material_fingerprint,
+                    topic.kind,
+                    topic.parent_id,
+                    topic.parent_title,
+                    topic.catalog_path,
+                    1 if topic.trainable else 0,
                     stamp,
                     stamp,
                 ),
@@ -570,6 +581,11 @@ def _material_snapshot(materials: TopicMaterials) -> dict[str, object]:
     return {
         "topic_id": materials.topic.id,
         "topic_title": materials.topic.title,
+        "topic_kind": materials.topic.kind,
+        "topic_section": materials.topic.section,
+        "topic_parent_id": materials.topic.parent_id,
+        "topic_parent_title": materials.topic.parent_title,
+        "catalog_path": materials.topic.catalog_path,
         "source_paths": [file.source_path for file in materials.files],
         "fingerprint": materials.fingerprint,
         "metadata": [_material_metadata_snapshot(file) for file in materials.files],

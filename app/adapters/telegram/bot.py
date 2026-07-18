@@ -1297,11 +1297,7 @@ async def _edit_review_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None
 
 def _ready_review_topics_by_section(services: AppServices) -> dict[str, list]:
     grouped: dict[str, list] = {}
-    for topic in services.repo.list_topics():
-        if topic.status != "ready":
-            continue
-        if not services.repo.get_topic_materials(topic).files:
-            continue
+    for topic in services.repo.list_trainable_topics():
         section = topic.section or "Без блока"
         grouped.setdefault(section, []).append(topic)
     for topics in grouped.values():

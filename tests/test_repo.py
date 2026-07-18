@@ -24,6 +24,12 @@ class RepoServiceTest(unittest.TestCase):
 |---|---|---|---|---|
 | CR01 | Data race в Go | [review.md](01-data-race/review.md) | [practice.go](01-data-race/practice.go) | Готово |
 | CR02 | Backpressure | - | - | Планируется |
+
+## Книги
+
+| # | Тема | Материал | Практика | Статус |
+|---|---|---|---|---|
+| BK01 | Martin Kleppmann - Designing Data-Intensive Applications | [index.md](books/ddia/index.md) | - | Планируется |
 """.strip(),
             encoding="utf-8",
         )
@@ -32,6 +38,26 @@ class RepoServiceTest(unittest.TestCase):
         topic_dir = self.repo / "01-data-race"
         topic_dir.mkdir()
         (topic_dir / "review.md").write_text("# Data race в Go\n", encoding="utf-8")
+        book_dir = self.repo / "books" / "ddia"
+        book_dir.mkdir(parents=True)
+        (book_dir / "index.md").write_text(
+            """
+# Designing Data-Intensive Applications
+
+## Разборы глав
+
+| Topic id | Глава | Разбор | Материал | Статус |
+|---|---|---|---|---|
+| DB10 | Chapter 3: Storage and Retrieval | Подсистемы хранения и извлечения данных | [review.md](../../database/10-storage-retrieval/review.md) | Готово |
+""".strip(),
+            encoding="utf-8",
+        )
+        db_dir = self.repo / "database" / "10-storage-retrieval"
+        db_dir.mkdir(parents=True)
+        (db_dir / "review.md").write_text(
+            "# Подсистемы хранения и извлечения данных\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -57,6 +83,54 @@ class RepoServiceTest(unittest.TestCase):
         self.assertEqual("", cr02.material_fingerprint)
         self.assertFalse(any(topic.id == "agent-contract" for topic in topics))
         self.assertFalse(any(topic.id == "claude-instructions" for topic in topics))
+
+    def test_book_index_expands_chapters_as_trainable_topics(self) -> None:
+        topics = RepoService(self.repo).list_topics()
+
+        book = next(topic for topic in topics if topic.id == "bk01")
+        self.assertEqual("book", book.kind)
+        self.assertEqual("planned", book.status)
+        self.assertFalse(book.trainable)
+        self.assertEqual(["books/ddia/index.md"], book.source_paths)
+
+        chapter = next(topic for topic in topics if topic.id == "db10")
+        self.assertEqual("chapter", chapter.kind)
+        self.assertEqual("bk01", chapter.parent_id)
+        self.assertEqual(
+            "Martin Kleppmann - Designing Data-Intensive Applications",
+            chapter.parent_title,
+        )
+        self.assertEqual("Книги / DDIA", chapter.section)
+        self.assertEqual(
+            [
+                "Книги",
+                "Martin Kleppmann - Designing Data-Intensive Applications",
+                "Подсистемы хранения и извлечения данных",
+            ],
+            chapter.breadcrumb,
+        )
+        self.assertEqual("ready", chapter.status)
+        self.assertTrue(chapter.trainable)
+        self.assertEqual(["database/10-storage-retrieval/review.md"], chapter.source_paths)
+        self.assertTrue(chapter.material_fingerprint)
+        self.assertFalse(
+            any(topic.id == "подсистемы-хранения-и-извлечения-данных" for topic in topics)
+        )
+
+    def test_trainable_topics_exclude_book_indexes_and_markdown_fallbacks(self) -> None:
+        topics = RepoService(self.repo).list_trainable_topics()
+        ids = {topic.id for topic in topics}
+
+        self.assertIn("cr01", ids)
+        self.assertIn("db10", ids)
+        self.assertNotIn("bk01", ids)
+        self.assertNotIn("подсистемы-хранения-и-извлечения-данных", ids)
+
+    def test_search_finds_nested_chapter_by_stable_id(self) -> None:
+        matches = RepoService(self.repo).search_topics("DB10")
+
+        self.assertEqual("db10", matches[0].id)
+        self.assertEqual("chapter", matches[0].kind)
 
     def test_search_finds_root_topic_by_text(self) -> None:
         matches = RepoService(self.repo).search_topics("data race")

@@ -90,6 +90,9 @@ class OpenQuestionService:
                 section=topic.section,
                 origin=origin,
                 material_context=_material_context(materials),
+                topic_kind=topic.kind,
+                parent_title=topic.parent_title,
+                catalog_path=topic.catalog_path,
             )
         )
         return self._create_question(
@@ -126,6 +129,9 @@ class OpenQuestionService:
                 section=topic.section,
                 origin=ORIGIN_POST_QUIZ,
                 material_context=_material_context(materials),
+                topic_kind=topic.kind,
+                parent_title=topic.parent_title,
+                catalog_path=topic.catalog_path,
                 quiz_context=_quiz_context(session, questions, answers),
             )
         )
@@ -468,6 +474,11 @@ def _material_snapshot(materials: TopicMaterials) -> dict[str, Any]:
     return {
         "topic_id": materials.topic.id,
         "topic_title": materials.topic.title,
+        "topic_kind": materials.topic.kind,
+        "topic_section": materials.topic.section,
+        "topic_parent_id": materials.topic.parent_id,
+        "topic_parent_title": materials.topic.parent_title,
+        "catalog_path": materials.topic.catalog_path,
         "source_paths": [file.source_path for file in materials.files],
         "fingerprint": materials.fingerprint,
         "metadata": [_material_metadata_snapshot(file) for file in materials.files],

@@ -39,13 +39,7 @@ class DailyQuizService:
         self._set(DAILY_QUIZ_LAST_SENT_DATE, today.isoformat())
 
     def ready_topics(self) -> list[RepoTopic]:
-        topics: list[RepoTopic] = []
-        for topic in self.repo.list_topics():
-            if topic.status != "ready":
-                continue
-            if not self.repo.get_topic_materials(topic).files:
-                continue
-            topics.append(topic)
+        topics = self.repo.list_trainable_topics()
         topics.sort(key=lambda item: (item.section, item.order_index or 10_000, item.title.lower()))
         return topics
 

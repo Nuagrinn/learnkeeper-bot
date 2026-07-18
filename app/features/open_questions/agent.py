@@ -98,6 +98,9 @@ class OpenQuestionGenerationInput:
     section: str
     origin: str
     material_context: list[dict[str, Any]]
+    topic_kind: str = "topic"
+    parent_title: str = ""
+    catalog_path: str = ""
     quiz_context: dict[str, Any] | None = None
 
 

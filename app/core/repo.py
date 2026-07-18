@@ -6,8 +6,10 @@ import logging
 import re
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+from app.core.catalog import CatalogLoader, CatalogNode
 
 
 log = logging.getLogger(__name__)
@@ -61,6 +63,12 @@ class RepoTopic:
     material_fingerprint: str = ""
     tags: list[str] = field(default_factory=list)
     source_paths: list[str] = field(default_factory=list)
+    kind: str = "topic"
+    parent_id: str = ""
+    parent_title: str = ""
+    breadcrumb: list[str] = field(default_factory=list)
+    catalog_path: str = ""
+    trainable: bool = True
     score: int = 0
 
 
@@ -238,7 +246,19 @@ class RepoService:
 
         scored: list[RepoTopic] = []
         for topic in topics:
-            haystack = _normalize(" ".join([topic.title, topic.id, " ".join(topic.source_paths)]))
+            haystack = _normalize(
+                " ".join(
+                    [
+                        topic.title,
+                        topic.id,
+                        topic.section,
+                        topic.parent_title,
+                        topic.catalog_path,
+                        " ".join(topic.breadcrumb),
+                        " ".join(topic.source_paths),
+                    ]
+                )
+            )
             title_norm = _normalize(topic.title)
             score = max(
                 _score_topic_query(
@@ -249,19 +269,7 @@ class RepoService:
                 for query_norm in query_variants
             )
             if score > 0:
-                scored.append(
-                    RepoTopic(
-                        id=topic.id,
-                        title=topic.title,
-                        status=topic.status,
-                        section=topic.section,
-                        order_index=topic.order_index,
-                        material_fingerprint=topic.material_fingerprint,
-                        tags=topic.tags,
-                        source_paths=topic.source_paths,
-                        score=score,
-                    )
-                )
+                scored.append(replace(topic, score=score))
         scored.sort(key=lambda item: (-item.score, item.title.lower()))
         return scored[:limit]
 
@@ -311,7 +319,7 @@ class RepoService:
             return []
 
         topics: dict[str, RepoTopic] = {}
-        for topic in self._load_json_topics() + self._load_root_topics():
+        for topic in self._load_catalog_topics():
             topics[topic.id] = topic
 
         # Markdown scan is a fallback: it adds files not already represented by
@@ -327,6 +335,19 @@ class RepoService:
             topics.setdefault(topic.id, topic)
 
         return sorted(topics.values(), key=lambda item: item.id.lower())
+
+    def list_trainable_topics(self) -> list[RepoTopic]:
+        return [
+            topic
+            for topic in self.list_topics()
+            if topic.trainable and topic.status == "ready" and self.get_topic_materials(topic).files
+        ]
+
+    def _load_catalog_topics(self) -> list[RepoTopic]:
+        if not self.repo_path:
+            return []
+        snapshot = CatalogLoader(self.repo_path).load()
+        return [_topic_from_catalog_node(node) for node in snapshot.nodes]
 
     def _load_json_topics(self) -> list[RepoTopic]:
         if not self.repo_path:
@@ -422,6 +443,7 @@ class RepoService:
     def _scan_markdown_topics(self) -> list[RepoTopic]:
         if not self.repo_path:
             return []
+        has_primary_catalog = (self.repo_path / "ROOT.md").exists()
         topics: list[RepoTopic] = []
         for path in self.repo_path.rglob("*.md"):
             if any(part in (".git", ".idea", ".gocache") for part in path.parts):
@@ -434,9 +456,13 @@ class RepoService:
                 RepoTopic(
                     id=slugify(title),
                     title=title,
+                    status="unknown" if has_primary_catalog else "ready",
                     section=_fallback_section(rel),
                     material_fingerprint=self.material_fingerprint([rel]),
                     source_paths=[rel],
+                    kind="discovered",
+                    catalog_path=_fallback_section(rel),
+                    trainable=not has_primary_catalog,
                 )
             )
         return topics
@@ -467,6 +493,25 @@ def _table_cells(line: str) -> list[str]:
     if not stripped.startswith("|") or not stripped.endswith("|"):
         return []
     return [cell.strip() for cell in stripped.strip("|").split("|")]
+
+
+def _topic_from_catalog_node(node: CatalogNode) -> RepoTopic:
+    return RepoTopic(
+        id=node.id,
+        title=node.title,
+        status=node.status,
+        section=node.section,
+        order_index=node.order_index,
+        material_fingerprint=node.material_fingerprint,
+        tags=list(node.tags),
+        source_paths=list(node.source_paths),
+        kind=node.kind,
+        parent_id=node.parent_id,
+        parent_title=node.parent_title,
+        breadcrumb=list(node.breadcrumb),
+        catalog_path=node.catalog_path,
+        trainable=node.trainable,
+    )
 
 
 def _extract_markdown_links(value: str) -> list[str]:

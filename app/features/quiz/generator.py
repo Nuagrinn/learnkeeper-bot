@@ -522,6 +522,10 @@ def _build_material_context(materials: TopicMaterials) -> str:
     lines = [
         f"TOPIC_ID: {materials.topic.id}",
         f"TOPIC_TITLE: {materials.topic.title}",
+        f"TOPIC_KIND: {materials.topic.kind}",
+        f"TOPIC_SECTION: {materials.topic.section}",
+        f"TOPIC_PARENT_TITLE: {materials.topic.parent_title}",
+        f"CATALOG_PATH: {materials.topic.catalog_path}",
         f"MATERIAL_FINGERPRINT: {materials.fingerprint}",
         "",
     ]

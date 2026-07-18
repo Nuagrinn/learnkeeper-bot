@@ -17,6 +17,11 @@ class Topic:
     tags: list[str]
     source_paths: list[str]
     last_seen_commit: str | None = None
+    kind: str = "topic"
+    parent_id: str = ""
+    parent_title: str = ""
+    catalog_path: str = ""
+    trainable: bool = True
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,11 @@ def topic_from_row(row: Row) -> Topic:
         tags=json.loads(row["tags_json"] or "[]"),
         source_paths=json.loads(row["source_paths_json"] or "[]"),
         last_seen_commit=row["last_seen_commit"],
+        kind=row["kind"] if "kind" in row.keys() else "topic",
+        parent_id=row["parent_id"] if "parent_id" in row.keys() else "",
+        parent_title=row["parent_title"] if "parent_title" in row.keys() else "",
+        catalog_path=row["catalog_path"] if "catalog_path" in row.keys() else "",
+        trainable=bool(row["trainable"]) if "trainable" in row.keys() else True,
     )
 
 
