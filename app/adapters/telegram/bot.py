@@ -1409,6 +1409,19 @@ def _section_topics(node: _SectionNode) -> list:
     return topics
 
 
+def _section_button_label(node: _SectionNode) -> str:
+    if node.children:
+        return f"{node.label} ({len(node.children)})"
+    return f"{node.label} ({_section_ready_count(node)}/{_section_total(node)})"
+
+
+def _section_node_metric_text(node: _SectionNode) -> str:
+    if not node.children:
+        return f"Тем: <b>{_section_total(node)}</b>"
+    metric_name = "Книг" if node.label.strip().lower() == "книги" else "Разделов"
+    return f"{metric_name}: <b>{len(node.children)}</b>"
+
+
 def _section_title(root: _SectionNode, path: tuple[int, ...]) -> str:
     labels: list[str] = []
     node = root
@@ -1447,9 +1460,7 @@ def _section_tree_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    _button_label(
-                        f"{child.label} ({_section_ready_count(child)}/{_section_total(child)})"
-                    ),
+                    _button_label(_section_button_label(child)),
                     callback_data=f"{callback_prefix}{_section_path_data(child_path)}",
                 )
             ]
@@ -1486,7 +1497,7 @@ def _section_tree_text(title: str, grouped: dict[str, list], *, path: tuple[int,
     return (
         f"<b>{html.escape(title, quote=False)}</b>\n\n"
         f"<b>{html.escape(_section_title(root, path), quote=False)}</b>\n"
-        f"Тем: <b>{_section_total(node)}</b>\n\n"
+        f"{_section_node_metric_text(node)}\n\n"
         "Выбери раздел."
     )
 

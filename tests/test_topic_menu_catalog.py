@@ -8,6 +8,7 @@ from app.adapters.telegram.bot import (
     _section_selection,
     _section_tree,
     _section_tree_keyboard,
+    _section_tree_text,
     _section_topics,
     _topic_block_keyboard,
 )
@@ -78,13 +79,14 @@ class TopicMenuCatalogTest(unittest.TestCase):
         node, _path = selection
         self.assertEqual(["db10"], [topic.id for topic in _section_topics(node)])
 
-    def test_topic_root_keyboard_shows_books_not_books_slash_ddia(self) -> None:
+    def test_topic_root_keyboard_counts_books_not_book_topics(self) -> None:
         grouped = _all_topics_by_section(_Services())
 
         keyboard = _topic_block_keyboard(grouped)
         labels = [row[0].text for row in keyboard.inline_keyboard]
 
-        self.assertIn("Книги (1/1)", labels)
+        self.assertIn("Книги (1)", labels)
+        self.assertNotIn("Книги (1/1)", labels)
         self.assertNotIn("Книги / DDIA (1/1)", labels)
 
     def test_nested_keyboard_shows_book_children(self) -> None:
@@ -102,6 +104,14 @@ class TopicMenuCatalogTest(unittest.TestCase):
 
         self.assertIn("DDIA (1/1)", labels)
         self.assertIn(f"{TOPIC_BLOCK_PREFIX}0.0", callbacks)
+
+    def test_book_container_text_counts_books(self) -> None:
+        grouped = _all_topics_by_section(_Services())
+
+        text = _section_tree_text("Темы", grouped, path=(0,))
+
+        self.assertIn("Книг: <b>1</b>", text)
+        self.assertNotIn("Тем: <b>1</b>", text)
 
 
 if __name__ == "__main__":
