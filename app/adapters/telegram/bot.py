@@ -1308,11 +1308,21 @@ def _ready_review_topics_by_section(services: AppServices) -> dict[str, list]:
 def _all_topics_by_section(services: AppServices) -> dict[str, list]:
     grouped: dict[str, list] = {}
     for topic in services.repo.list_topics():
+        if not _is_visible_catalog_topic(topic):
+            continue
         section = topic.section or "Без блока"
         grouped.setdefault(section, []).append(topic)
     for topics in grouped.values():
         topics.sort(key=lambda item: (item.order_index or 10_000, item.title.lower()))
     return grouped
+
+
+def _is_visible_catalog_topic(topic) -> bool:
+    if topic.kind in ("book", "index", "reference"):
+        return False
+    if topic.kind == "discovered" and not topic.trainable:
+        return False
+    return True
 
 
 def _topic_blocks_text(grouped: dict[str, list]) -> str:
