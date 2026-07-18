@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from app.adapters.telegram.bot import _all_topics_by_section
+from app.adapters.telegram.bot import (
+    TOPIC_BLOCK_PREFIX,
+    _all_topics_by_section,
+    _section_selection,
+    _section_tree,
+    _section_tree_keyboard,
+    _section_topics,
+    _topic_block_keyboard,
+)
 from app.core.repo import RepoTopic
 
 
@@ -57,6 +65,43 @@ class TopicMenuCatalogTest(unittest.TestCase):
         self.assertNotIn("notes", grouped)
         self.assertEqual(["db10"], [topic.id for topic in grouped["Книги / DDIA"]])
         self.assertEqual(["b03"], [topic.id for topic in grouped["Базовый Go"]])
+
+    def test_section_tree_builds_nested_book_navigation(self) -> None:
+        grouped = _all_topics_by_section(_Services())
+        root = _section_tree(grouped)
+
+        self.assertIn("Книги", root.children)
+        self.assertIn("DDIA", root.children["Книги"].children)
+
+        selection = _section_selection(grouped, "0.0")
+        assert selection is not None
+        node, _path = selection
+        self.assertEqual(["db10"], [topic.id for topic in _section_topics(node)])
+
+    def test_topic_root_keyboard_shows_books_not_books_slash_ddia(self) -> None:
+        grouped = _all_topics_by_section(_Services())
+
+        keyboard = _topic_block_keyboard(grouped)
+        labels = [row[0].text for row in keyboard.inline_keyboard]
+
+        self.assertIn("Книги (1/1)", labels)
+        self.assertNotIn("Книги / DDIA (1/1)", labels)
+
+    def test_nested_keyboard_shows_book_children(self) -> None:
+        grouped = _all_topics_by_section(_Services())
+        keyboard = _section_tree_keyboard(
+            grouped,
+            path=(0,),
+            callback_prefix=TOPIC_BLOCK_PREFIX,
+            root_callback="topic_blocks",
+            abort_callback="abort_topics",
+        )
+
+        labels = [row[0].text for row in keyboard.inline_keyboard]
+        callbacks = [row[0].callback_data for row in keyboard.inline_keyboard]
+
+        self.assertIn("DDIA (1/1)", labels)
+        self.assertIn(f"{TOPIC_BLOCK_PREFIX}0.0", callbacks)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import contextlib
 import html
 import logging
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime, time as datetime_time
 from pathlib import Path
 from time import perf_counter
@@ -682,22 +683,26 @@ async def topic_block_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(TOPIC_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Темы» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(TOPIC_BLOCK_PREFIX)
     grouped = _all_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Темы» еще раз.")
         return
 
-    _, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _topic_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_topic_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        format_topics(topics),
+        _topic_list_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
         reply_markup=_topic_section_keyboard(),
     )
@@ -1325,45 +1330,226 @@ def _is_visible_catalog_topic(topic) -> bool:
     return True
 
 
-def _topic_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    ready_count = sum(
-        1
-        for topics in grouped.values()
-        for topic in topics
-        if topic.status == "ready"
-    )
-    planned_count = sum(
-        1
-        for topics in grouped.values()
-        for topic in topics
-        if topic.status == "planned"
-    )
-    lines = [
-        "<b>Темы</b>",
-        "",
-        f"Всего тем: <b>{total}</b>",
-        f"Готово: <b>{ready_count}</b> · В плане: <b>{planned_count}</b>",
-        "",
-        "Выбери блок.",
-    ]
-    return "\n".join(lines)
+@dataclass
+class _SectionNode:
+    label: str
+    topics: list = field(default_factory=list)
+    children: dict[str, "_SectionNode"] = field(default_factory=dict)
 
 
-def _topic_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
+def _section_tree(grouped: dict[str, list]) -> _SectionNode:
+    root = _SectionNode("")
+    for section, topics in grouped.items():
+        node = root
+        for part in _section_parts(section):
+            node = node.children.setdefault(part, _SectionNode(part))
+        node.topics.extend(topics)
+    return root
+
+
+def _section_parts(section: str) -> list[str]:
+    parts = [part.strip() for part in section.split("/") if part.strip()]
+    return parts or ["Без блока"]
+
+
+def _section_node_at(root: _SectionNode, path: tuple[int, ...]) -> _SectionNode | None:
+    node = root
+    for index in path:
+        children = list(node.children.values())
+        if index < 0 or index >= len(children):
+            return None
+        node = children[index]
+    return node
+
+
+def _section_path(raw_path: str) -> tuple[int, ...] | None:
+    clean = raw_path.strip()
+    if not clean:
+        return ()
+    parts = clean.split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
+def _section_path_data(path: tuple[int, ...]) -> str:
+    return ".".join(str(index) for index in path)
+
+
+def _section_child_path(path: tuple[int, ...], child_index: int) -> tuple[int, ...]:
+    return (*path, child_index)
+
+
+def _section_parent_path(path: tuple[int, ...]) -> tuple[int, ...]:
+    return path[:-1]
+
+
+def _section_total(node: _SectionNode) -> int:
+    return len(node.topics) + sum(_section_total(child) for child in node.children.values())
+
+
+def _section_ready_count(node: _SectionNode) -> int:
+    return sum(1 for topic in node.topics if topic.status == "ready") + sum(
+        _section_ready_count(child) for child in node.children.values()
+    )
+
+
+def _section_planned_count(node: _SectionNode) -> int:
+    return sum(1 for topic in node.topics if topic.status == "planned") + sum(
+        _section_planned_count(child) for child in node.children.values()
+    )
+
+
+def _section_topics(node: _SectionNode) -> list:
+    topics = list(node.topics)
+    for child in node.children.values():
+        topics.extend(_section_topics(child))
+    topics.sort(key=lambda item: (item.order_index or 10_000, item.title.lower()))
+    return topics
+
+
+def _section_title(root: _SectionNode, path: tuple[int, ...]) -> str:
+    labels: list[str] = []
+    node = root
+    for index in path:
+        children = list(node.children.values())
+        if index < 0 or index >= len(children):
+            break
+        node = children[index]
+        labels.append(node.label)
+    return " / ".join(labels) if labels else "Блоки"
+
+
+def _section_leaf_title(root: _SectionNode, path: tuple[int, ...]) -> str:
+    node = _section_node_at(root, path)
+    if not node:
+        return "Блок"
+    if len(path) <= 1:
+        return node.label
+    parent_title = _section_title(root, _section_parent_path(path))
+    return f"{node.label} · {parent_title}"
+
+
+def _section_tree_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+    callback_prefix: str,
+    root_callback: str,
+    abort_callback: str,
+) -> InlineKeyboardMarkup:
+    root = _section_tree(grouped)
+    node = _section_node_at(root, path) or root
     rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        ready_count = sum(1 for topic in topics if topic.status == "ready")
+    for index, child in enumerate(node.children.values()):
+        child_path = _section_child_path(path, index)
         rows.append(
             [
                 InlineKeyboardButton(
-                    _button_label(f"{section} ({ready_count}/{len(topics)})"),
-                    callback_data=f"{TOPIC_BLOCK_PREFIX}{index}",
+                    _button_label(
+                        f"{child.label} ({_section_ready_count(child)}/{_section_total(child)})"
+                    ),
+                    callback_data=f"{callback_prefix}{_section_path_data(child_path)}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_TOPICS)])
+    if path:
+        parent = _section_parent_path(path)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "Назад",
+                    callback_data=(
+                        root_callback
+                        if not parent
+                        else f"{callback_prefix}{_section_path_data(parent)}"
+                    ),
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("Отмена", callback_data=abort_callback)])
     return InlineKeyboardMarkup(rows)
+
+
+def _section_tree_text(title: str, grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    root = _section_tree(grouped)
+    node = _section_node_at(root, path) or root
+    if not path:
+        return (
+            f"<b>{html.escape(title, quote=False)}</b>\n\n"
+            f"Всего тем: <b>{_section_total(root)}</b>\n"
+            f"Готово: <b>{_section_ready_count(root)}</b> · "
+            f"В плане: <b>{_section_planned_count(root)}</b>\n\n"
+            "Выбери блок."
+        )
+    return (
+        f"<b>{html.escape(title, quote=False)}</b>\n\n"
+        f"<b>{html.escape(_section_title(root, path), quote=False)}</b>\n"
+        f"Тем: <b>{_section_total(node)}</b>\n\n"
+        "Выбери раздел."
+    )
+
+
+def _section_selection(
+    grouped: dict[str, list],
+    raw_path: str,
+) -> tuple[_SectionNode, tuple[int, ...]] | None:
+    path = _section_path(raw_path)
+    if path is None:
+        return None
+    root = _section_tree(grouped)
+    node = _section_node_at(root, path)
+    if node is None:
+        return None
+    return node, path
+
+
+def _topic_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Темы", grouped, path=path)
+
+
+def _topic_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=TOPIC_BLOCK_PREFIX,
+        root_callback=TOPIC_BLOCKS,
+        abort_callback=ABORT_TOPICS,
+    )
+
+
+def _topic_list_text(title: str, topics: list) -> str:
+    if not topics:
+        return "Темы не найдены."
+    lines = [
+        "<b>Темы</b>",
+        f"Найдено: <b>{len(topics)}</b>",
+        "",
+        f"<b>{html.escape(title, quote=False)}</b>",
+    ]
+    lines.extend(_topic_menu_row(topic) for topic in topics)
+    return "\n".join(lines)
+
+
+def _topic_menu_row(topic) -> str:
+    return (
+        f"<code>{html.escape(topic.id, quote=False)}</code> · "
+        f"{_topic_status_icon(topic.status)} "
+        f"{html.escape(topic.title, quote=False)}"
+    )
+
+
+def _topic_status_icon(status: str) -> str:
+    return {
+        "ready": "✅",
+        "planned": "⚪",
+        "learning": "🕓",
+    }.get(status, "•")
 
 
 def _topic_section_keyboard() -> InlineKeyboardMarkup:
@@ -1375,13 +1561,8 @@ def _topic_section_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _review_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    return (
-        "<b>Добавить повтор</b>\n\n"
-        f"Готовых тем: <b>{total}</b>\n"
-        "Выбери блок."
-    )
+def _review_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Добавить повтор", grouped, path=path)
 
 
 def _review_topics_text(section: str, topics: list) -> str:
@@ -1393,19 +1574,18 @@ def _review_topics_text(section: str, topics: list) -> str:
     )
 
 
-def _review_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    _button_label(f"{section} ({len(topics)})"),
-                    callback_data=f"{REVIEW_BLOCK_PREFIX}{index}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_REVIEW_ADD)])
-    return InlineKeyboardMarkup(rows)
+def _review_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=REVIEW_BLOCK_PREFIX,
+        root_callback=REVIEW_ADD_BLOCKS,
+        abort_callback=ABORT_REVIEW_ADD,
+    )
 
 
 def _review_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
@@ -1424,13 +1604,8 @@ def _review_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _explain_check_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    return (
-        "<b>Объяснить тему</b>\n\n"
-        f"Готовых тем: <b>{total}</b>\n"
-        "Выбери блок."
-    )
+def _explain_check_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Объяснить тему", grouped, path=path)
 
 
 def _explain_check_topics_text(section: str, topics: list) -> str:
@@ -1442,19 +1617,18 @@ def _explain_check_topics_text(section: str, topics: list) -> str:
     )
 
 
-def _explain_check_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    _button_label(f"{section} ({len(topics)})"),
-                    callback_data=f"{EXPLAIN_CHECK_BLOCK_PREFIX}{index}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_EXPLAIN_CHECK)])
-    return InlineKeyboardMarkup(rows)
+def _explain_check_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=EXPLAIN_CHECK_BLOCK_PREFIX,
+        root_callback=EXPLAIN_CHECK_BLOCKS,
+        abort_callback=ABORT_EXPLAIN_CHECK,
+    )
 
 
 def _explain_check_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
@@ -1473,13 +1647,8 @@ def _explain_check_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _read_material_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    return (
-        "<b>Читать материал</b>\n\n"
-        f"Готовых тем: <b>{total}</b>\n"
-        "Выбери блок."
-    )
+def _read_material_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Читать материал", grouped, path=path)
 
 
 def _read_material_topics_text(section: str, topics: list) -> str:
@@ -1491,19 +1660,18 @@ def _read_material_topics_text(section: str, topics: list) -> str:
     )
 
 
-def _read_material_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    _button_label(f"{section} ({len(topics)})"),
-                    callback_data=f"{READ_MATERIAL_BLOCK_PREFIX}{index}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_READ_MATERIAL)])
-    return InlineKeyboardMarkup(rows)
+def _read_material_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=READ_MATERIAL_BLOCK_PREFIX,
+        root_callback=READ_MATERIAL_BLOCKS,
+        abort_callback=ABORT_READ_MATERIAL,
+    )
 
 
 def _read_material_topic_keyboard(topics: list) -> InlineKeyboardMarkup:
@@ -1712,13 +1880,8 @@ async def _edit_instant_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-def _instant_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    return (
-        "<b>Пройти тест сейчас</b>\n\n"
-        f"Готовых тем: <b>{total}</b>\n"
-        "Выбери блок."
-    )
+def _instant_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Пройти тест сейчас", grouped, path=path)
 
 
 def _instant_topics_text(section: str, topics: list) -> str:
@@ -1730,13 +1893,8 @@ def _instant_topics_text(section: str, topics: list) -> str:
     )
 
 
-def _open_question_blocks_text(grouped: dict[str, list]) -> str:
-    total = sum(len(topics) for topics in grouped.values())
-    return (
-        "<b>Открытый вопрос</b>\n\n"
-        f"Готовых тем: <b>{total}</b>\n"
-        "Выбери блок."
-    )
+def _open_question_blocks_text(grouped: dict[str, list], *, path: tuple[int, ...] = ()) -> str:
+    return _section_tree_text("Открытый вопрос", grouped, path=path)
 
 
 def _open_question_topics_text(section: str, topics: list) -> str:
@@ -1748,42 +1906,40 @@ def _open_question_topics_text(section: str, topics: list) -> str:
     )
 
 
-def _instant_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    _button_label(f"{section} ({len(topics)})"),
-                    callback_data=f"{INSTANT_BLOCK_PREFIX}{index}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_INSTANT_QUIZ)])
-    return InlineKeyboardMarkup(rows)
+def _instant_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=INSTANT_BLOCK_PREFIX,
+        root_callback=INSTANT_BLOCKS,
+        abort_callback=ABORT_INSTANT_QUIZ,
+    )
 
 
-def _open_question_block_keyboard(grouped: dict[str, list]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for index, (section, topics) in enumerate(grouped.items()):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    _button_label(f"{section} ({len(topics)})"),
-                    callback_data=f"{OPEN_QUESTION_BLOCK_PREFIX}{index}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton("Отмена", callback_data=ABORT_OPEN_QUESTION)])
-    return InlineKeyboardMarkup(rows)
+def _open_question_block_keyboard(
+    grouped: dict[str, list],
+    *,
+    path: tuple[int, ...] = (),
+) -> InlineKeyboardMarkup:
+    return _section_tree_keyboard(
+        grouped,
+        path=path,
+        callback_prefix=OPEN_QUESTION_BLOCK_PREFIX,
+        root_callback=OPEN_QUESTION_BLOCKS,
+        abort_callback=ABORT_OPEN_QUESTION,
+    )
 
 
-def _instant_topic_keyboard(section_index: int, topics: list) -> InlineKeyboardMarkup:
+def _instant_topic_keyboard(section_path: str, topics: list) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 "Весь блок",
-                callback_data=f"{INSTANT_BLOCK_ALL_PREFIX}{section_index}",
+                callback_data=f"{INSTANT_BLOCK_ALL_PREFIX}{section_path}",
             )
         ]
     ]
@@ -3477,24 +3633,28 @@ async def instant_block_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(INSTANT_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Пройти тест сейчас» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(INSTANT_BLOCK_PREFIX)
     grouped = _ready_review_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Пройти тест сейчас» еще раз.")
         return
 
-    section, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _instant_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_instant_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        _instant_topics_text(section, topics),
+        _instant_topics_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
-        reply_markup=_instant_topic_keyboard(index, topics),
+        reply_markup=_instant_topic_keyboard(_section_path_data(path), topics),
     )
 
 
@@ -3569,22 +3729,26 @@ async def open_question_block_callback(update: Update, context: ContextTypes.DEF
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(OPEN_QUESTION_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Открытый вопрос» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(OPEN_QUESTION_BLOCK_PREFIX)
     grouped = _ready_review_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Открытый вопрос» еще раз.")
         return
 
-    section, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _open_question_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_open_question_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        _open_question_topics_text(section, topics),
+        _open_question_topics_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
         reply_markup=_open_question_topic_keyboard(topics),
     )
@@ -4398,22 +4562,26 @@ async def review_block_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(REVIEW_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Добавить повтор» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(REVIEW_BLOCK_PREFIX)
     grouped = _ready_review_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Добавить повтор» еще раз.")
         return
 
-    section, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _review_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_review_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        _review_topics_text(section, topics),
+        _review_topics_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
         reply_markup=_review_topic_keyboard(topics),
     )
@@ -4506,22 +4674,26 @@ async def explain_check_block_callback(update: Update, context: ContextTypes.DEF
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(EXPLAIN_CHECK_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Объяснить тему» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(EXPLAIN_CHECK_BLOCK_PREFIX)
     grouped = _ready_review_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Объяснить тему» еще раз.")
         return
 
-    section, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _explain_check_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_explain_check_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        _explain_check_topics_text(section, topics),
+        _explain_check_topics_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
         reply_markup=_explain_check_topic_keyboard(topics),
     )
@@ -4606,22 +4778,26 @@ async def read_material_block_callback(update: Update, context: ContextTypes.DEF
         return
 
     await query.answer()
-    raw_index = (query.data or "").removeprefix(READ_MATERIAL_BLOCK_PREFIX)
-    try:
-        index = int(raw_index)
-    except ValueError:
-        await query.edit_message_text("Не понял выбранный блок. Нажми «Читать материал» еще раз.")
-        return
-
+    raw_path = (query.data or "").removeprefix(READ_MATERIAL_BLOCK_PREFIX)
     grouped = _ready_review_topics_by_section(_services(context))
-    sections = list(grouped.items())
-    if index < 0 or index >= len(sections):
+    selection = _section_selection(grouped, raw_path)
+    if not selection:
         await query.edit_message_text("Список блоков устарел. Нажми «Читать материал» еще раз.")
         return
 
-    section, topics = sections[index]
+    node, path = selection
+    if node.children:
+        await query.edit_message_text(
+            _read_material_blocks_text(grouped, path=path),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_read_material_block_keyboard(grouped, path=path),
+        )
+        return
+
+    root = _section_tree(grouped)
+    topics = _section_topics(node)
     await query.edit_message_text(
-        _read_material_topics_text(section, topics),
+        _read_material_topics_text(_section_leaf_title(root, path), topics),
         parse_mode=ParseMode.HTML,
         reply_markup=_read_material_topic_keyboard(topics),
     )
