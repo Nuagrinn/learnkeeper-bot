@@ -11,8 +11,9 @@ from app.adapters.telegram.bot import (
     _section_tree_text,
     _section_topics,
     _topic_block_keyboard,
+    _with_repo_sync_warning,
 )
-from app.core.repo import RepoTopic
+from app.core.repo import RepoPullResult, RepoTopic
 
 
 class _Repo:
@@ -112,6 +113,15 @@ class TopicMenuCatalogTest(unittest.TestCase):
 
         self.assertIn("Книг: <b>1</b>", text)
         self.assertNotIn("Тем: <b>1</b>", text)
+
+    def test_repo_sync_failure_warning_is_visible(self) -> None:
+        text = _with_repo_sync_warning(
+            "<b>Темы</b>",
+            RepoPullResult("failed", "local changes would be overwritten"),
+        )
+
+        self.assertIn("Не удалось обновить lk-prep", text)
+        self.assertIn("<b>Темы</b>", text)
 
 
 if __name__ == "__main__":

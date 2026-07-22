@@ -64,7 +64,7 @@ from app.adapters.telegram.formatters import (
 )
 from app.config import PROJECT_ROOT, Settings, load_settings
 from app.core.db import Database
-from app.core.repo import RepoService
+from app.core.repo import RepoPullResult, RepoService
 from app.features.llm_usage.service import (
     LlmUsageBudgetConfig,
     LlmUsagePriceConfig,
@@ -362,11 +362,14 @@ def _services(context: ContextTypes.DEFAULT_TYPE) -> AppServices:
     return context.application.bot_data["services"]
 
 
-async def _sync_materials_repo(context: ContextTypes.DEFAULT_TYPE, reason: str) -> None:
+async def _sync_materials_repo(
+    context: ContextTypes.DEFAULT_TYPE,
+    reason: str,
+) -> RepoPullResult | None:
     services = _services(context)
     settings = services.settings
     if not settings.repo_pull_before_read:
-        return
+        return None
 
     try:
         result = await asyncio.to_thread(
@@ -377,7 +380,7 @@ async def _sync_materials_repo(context: ContextTypes.DEFAULT_TYPE, reason: str) 
         )
     except Exception:
         log.exception("Repo pull before %s failed unexpectedly", reason)
-        return
+        return RepoPullResult("failed", "unexpected error")
 
     detail = result.detail.replace("\n", " ")[:240] if result.detail else ""
     log.info(
@@ -385,6 +388,17 @@ async def _sync_materials_repo(context: ContextTypes.DEFAULT_TYPE, reason: str) 
         reason,
         result.status,
         detail,
+    )
+    return result
+
+
+def _with_repo_sync_warning(text: str, sync_result: RepoPullResult | None) -> str:
+    if not sync_result or sync_result.status != "failed":
+        return text
+    return (
+        "<b>Не удалось обновить lk-prep</b>\n"
+        "Показываю локальную копию материалов. Часть новых блоков может не отображаться.\n\n"
+        f"{text}"
     )
 
 
@@ -658,16 +672,16 @@ async def topic_blocks_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     await query.answer()
-    await _sync_materials_repo(context, "topic-blocks")
+    sync_result = await _sync_materials_repo(context, "topic-blocks")
     grouped = _all_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Темы</b>\n\nВ lk-prep пока нет тем.",
+            _with_repo_sync_warning("<b>Темы</b>\n\nВ lk-prep пока нет тем.", sync_result),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _topic_blocks_text(grouped),
+        _with_repo_sync_warning(_topic_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_topic_block_keyboard(grouped),
     )
@@ -769,22 +783,25 @@ async def _show_topics(
         return
 
     services = _services(context)
-    await _sync_materials_repo(context, "topics")
+    sync_result = await _sync_materials_repo(context, "topics")
     items = services.repo.search_topics(query, limit=30)
-    await _answer_long(update, format_topics(items))
+    await _answer_long(update, _with_repo_sync_warning(format_topics(items), sync_result))
 
 
 async def _show_topic_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     services = _services(context)
-    await _sync_materials_repo(context, "topic-blocks")
+    sync_result = await _sync_materials_repo(context, "topic-blocks")
     grouped = _all_topics_by_section(services)
     if not grouped:
-        await _answer_long(update, "<b>Темы</b>\n\nВ lk-prep пока нет тем.")
+        await _answer_long(
+            update,
+            _with_repo_sync_warning("<b>Темы</b>\n\nВ lk-prep пока нет тем.", sync_result),
+        )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _topic_blocks_text(grouped),
+        _with_repo_sync_warning(_topic_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_topic_block_keyboard(grouped),
     )
@@ -1265,36 +1282,42 @@ def _quiz_report_keyboard(
 
 async def _show_review_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     services = _services(context)
-    await _sync_materials_repo(context, "review-blocks")
+    sync_result = await _sync_materials_repo(context, "review-blocks")
     grouped = _ready_review_topics_by_section(services)
     if not grouped:
         await _answer_long(
             update,
-            "<b>Добавить повтор</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Добавить повтор</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
         )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _review_blocks_text(grouped),
+        _with_repo_sync_warning(_review_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_review_block_keyboard(grouped),
     )
 
 
 async def _edit_review_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "review-blocks")
+    sync_result = await _sync_materials_repo(context, "review-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Добавить повтор</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Добавить повтор</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _review_blocks_text(grouped),
+        _with_repo_sync_warning(_review_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_review_block_keyboard(grouped),
     )
@@ -1799,93 +1822,108 @@ def _review_existing_keyboard(topic_id: str) -> InlineKeyboardMarkup:
 
 
 async def _show_instant_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "instant-blocks")
+    sync_result = await _sync_materials_repo(context, "instant-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await _answer_long(
             update,
-            "<b>Пройти тест сейчас</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Пройти тест сейчас</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
         )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _instant_blocks_text(grouped),
+        _with_repo_sync_warning(_instant_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_instant_block_keyboard(grouped),
     )
 
 
 async def _show_open_question_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "open-question-blocks")
+    sync_result = await _sync_materials_repo(context, "open-question-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await _answer_long(
             update,
-            "<b>Открытый вопрос</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Открытый вопрос</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
         )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _open_question_blocks_text(grouped),
+        _with_repo_sync_warning(_open_question_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_open_question_block_keyboard(grouped),
     )
 
 
 async def _show_explain_check_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "explain-check-blocks")
+    sync_result = await _sync_materials_repo(context, "explain-check-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await _answer_long(
             update,
-            "<b>Объяснить тему</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Объяснить тему</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
         )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _explain_check_blocks_text(grouped),
+        _with_repo_sync_warning(_explain_check_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_explain_check_block_keyboard(grouped),
     )
 
 
 async def _show_read_material_blocks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "read-material-blocks")
+    sync_result = await _sync_materials_repo(context, "read-material-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await _answer_long(
             update,
-            "<b>Читать материал</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Читать материал</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
         )
         return
     if not update.message:
         return
     await update.message.reply_text(
-        _read_material_blocks_text(grouped),
+        _with_repo_sync_warning(_read_material_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_read_material_block_keyboard(grouped),
     )
 
 
 async def _edit_instant_blocks(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _sync_materials_repo(context, "instant-blocks")
+    sync_result = await _sync_materials_repo(context, "instant-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Пройти тест сейчас</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Пройти тест сейчас</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _instant_blocks_text(grouped),
+        _with_repo_sync_warning(_instant_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_instant_block_keyboard(grouped),
     )
@@ -2901,17 +2939,20 @@ async def open_question_blocks_callback(update: Update, context: ContextTypes.DE
         return
 
     await query.answer()
-    await _sync_materials_repo(context, "open-question-blocks")
+    sync_result = await _sync_materials_repo(context, "open-question-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Открытый вопрос</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Открытый вопрос</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _open_question_blocks_text(grouped),
+        _with_repo_sync_warning(_open_question_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_open_question_block_keyboard(grouped),
     )
@@ -4659,17 +4700,20 @@ async def explain_check_blocks_callback(update: Update, context: ContextTypes.DE
         return
 
     await query.answer()
-    await _sync_materials_repo(context, "explain-check-blocks")
+    sync_result = await _sync_materials_repo(context, "explain-check-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Объяснить тему</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Объяснить тему</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _explain_check_blocks_text(grouped),
+        _with_repo_sync_warning(_explain_check_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_explain_check_block_keyboard(grouped),
     )
@@ -4763,17 +4807,20 @@ async def read_material_blocks_callback(update: Update, context: ContextTypes.DE
         return
 
     await query.answer()
-    await _sync_materials_repo(context, "read-material-blocks")
+    sync_result = await _sync_materials_repo(context, "read-material-blocks")
     grouped = _ready_review_topics_by_section(_services(context))
     if not grouped:
         await query.edit_message_text(
-            "<b>Читать материал</b>\n\n"
-            "В lk-prep пока нет ready-тем с читаемыми материалами.",
+            _with_repo_sync_warning(
+                "<b>Читать материал</b>\n\n"
+                "В lk-prep пока нет ready-тем с читаемыми материалами.",
+                sync_result,
+            ),
             parse_mode=ParseMode.HTML,
         )
         return
     await query.edit_message_text(
-        _read_material_blocks_text(grouped),
+        _with_repo_sync_warning(_read_material_blocks_text(grouped), sync_result),
         parse_mode=ParseMode.HTML,
         reply_markup=_read_material_block_keyboard(grouped),
     )
