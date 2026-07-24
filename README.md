@@ -183,8 +183,8 @@ bash scripts/vps-bootstrap.sh
 ```
 
 The script installs system packages, Python dependencies, Claude CLI via npm,
-builds `whisper.cpp`, creates systemd units and prepares `.env` from
-`deploy/env.vps.example`.
+builds `whisper.cpp` into `/opt/assistant-shared/whisper.cpp`, creates systemd
+units and prepares `.env` from `deploy/env.vps.example`.
 
 After bootstrap:
 
@@ -419,6 +419,15 @@ Test transcription without Telegram:
 
 `STT_PROVIDER=whisper_cli` is still available if you install the Python/OpenAI
 Whisper CLI separately and want the bot to call its local `whisper` command.
+
+On VPS, keep the heavy `whisper.cpp` model in a shared directory and point every
+assistant bot to the same files:
+
+```env
+STT_PROVIDER=whisper_cpp
+STT_WHISPER_CPP_BIN=/opt/assistant-shared/whisper.cpp/bin/whisper-cli
+STT_WHISPER_CPP_MODEL=/opt/assistant-shared/whisper.cpp/models/ggml-medium.bin
+```
 
 To use OpenAI speech-to-text instead, set:
 

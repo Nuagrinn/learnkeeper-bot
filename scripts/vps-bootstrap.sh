@@ -10,7 +10,9 @@ BOT_REPO_URL="${BOT_REPO_URL:-}"
 BOT_GIT_BRANCH="${BOT_GIT_BRANCH:-main}"
 MATERIALS_REPO_URL="${MATERIALS_REPO_URL:-}"
 MATERIALS_GIT_BRANCH="${MATERIALS_GIT_BRANCH:-main}"
-WHISPER_MODEL="${WHISPER_MODEL:-base}"
+ASSISTANT_SHARED_DIR="${ASSISTANT_SHARED_DIR:-/opt/assistant-shared}"
+WHISPER_CPP_DIR="${WHISPER_CPP_DIR:-$ASSISTANT_SHARED_DIR/whisper.cpp}"
+WHISPER_MODEL="${WHISPER_MODEL:-medium}"
 INSTALL_CLAUDE_CLI="${INSTALL_CLAUDE_CLI:-1}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 
@@ -49,6 +51,8 @@ fi
 
 mkdir -p "$BASE_DIR"
 chown -R "$APP_USER:$APP_USER" "$BASE_DIR"
+mkdir -p "$ASSISTANT_SHARED_DIR"
+chown -R "$APP_USER:$APP_USER" "$ASSISTANT_SHARED_DIR"
 
 if [ ! -d "$APP_DIR/.git" ]; then
   sudo -u "$APP_USER" git clone --branch "$BOT_GIT_BRANCH" "$BOT_REPO_URL" "$APP_DIR"
@@ -76,7 +80,10 @@ if [ "$INSTALL_CLAUDE_CLI" = "1" ] && ! command -v claude >/dev/null 2>&1; then
   npm install -g @anthropic-ai/claude-code
 fi
 
-sudo -u "$APP_USER" APP_DIR="$APP_DIR" bash "$APP_DIR/scripts/setup-whisper-cpp-linux.sh" "$WHISPER_MODEL"
+sudo -u "$APP_USER" \
+  APP_DIR="$APP_DIR" \
+  WHISPER_CPP_DIR="$WHISPER_CPP_DIR" \
+  bash "$APP_DIR/scripts/setup-whisper-cpp-linux.sh" "$WHISPER_MODEL"
 
 if [ ! -f "$APP_DIR/.env" ]; then
   cp "$APP_DIR/deploy/env.vps.example" "$APP_DIR/.env"
