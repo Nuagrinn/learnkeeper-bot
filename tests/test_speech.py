@@ -58,7 +58,7 @@ class SpeechToTextTest(unittest.TestCase):
                 run_command=fake_run,
             )
 
-            with patch("app.features.speech.service._convert_to_wav", return_value=audio):
+            with patch("assistant_toolkit.speech.service._convert_to_wav", return_value=audio):
                 self.assertEqual("мапы", transcriber.transcribe(audio))
 
     def test_whisper_cpp_requires_model_file(self) -> None:

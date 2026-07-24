@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Any
 from typing import Protocol
 
-from app.core.claude_cli import DISALLOWED_AGENT_TOOLS
+from assistant_toolkit.llm import (
+    DISALLOWED_AGENT_TOOLS,
+    PAID_API_ENV_VARS,
+    reported_usage_from_stdout,
+)
 from app.core.repo import RepoTopic, TopicMaterial, TopicMaterials
 from app.features.llm_usage.service import LlmUsageRecorder, NoopLlmUsageRecorder
 from app.features.quiz.models import GeneratedQuestion
@@ -35,14 +39,6 @@ CODE_FILE_EXTENSIONS = {
     ".go", ".py", ".js", ".jsx", ".ts", ".tsx", ".java", ".kt", ".c", ".cc",
     ".cpp", ".h", ".hpp", ".rs", ".rb", ".php", ".cs", ".swift", ".scala",
 }
-PAID_API_ENV_VARS = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "CLAUDE_CODE_USE_BEDROCK",
-    "CLAUDE_CODE_USE_VERTEX",
-    "CLAUDE_CODE_USE_FOUNDRY",
-)
 QUIZ_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -623,48 +619,7 @@ def _raise_if_denied_structured_output(text: str) -> None:
 
 
 def _claude_cli_reported_usage(stdout: str | None) -> dict[str, Any]:
-    text = (stdout or "").strip()
-    if not text:
-        return {}
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-
-    usage = raw.get("usage")
-    if not isinstance(usage, dict):
-        usage = {}
-    direct_input_tokens = _optional_int(usage.get("input_tokens")) or 0
-    cache_creation_tokens = _optional_int(usage.get("cache_creation_input_tokens")) or 0
-    cache_read_tokens = _optional_int(usage.get("cache_read_input_tokens")) or 0
-    output_tokens = _optional_int(usage.get("output_tokens")) or 0
-    input_tokens = direct_input_tokens + cache_creation_tokens + cache_read_tokens
-    total_tokens = input_tokens + output_tokens
-    total_cost_usd = _optional_float(raw.get("total_cost_usd"))
-
-    if total_tokens <= 0 and total_cost_usd is None:
-        return {}
-
-    metadata = {
-        "claude_total_cost_usd": total_cost_usd,
-        "claude_input_tokens": direct_input_tokens,
-        "claude_cache_creation_input_tokens": cache_creation_tokens,
-        "claude_cache_read_input_tokens": cache_read_tokens,
-        "claude_output_tokens": output_tokens,
-        "claude_duration_ms": _optional_int(raw.get("duration_ms")),
-        "claude_duration_api_ms": _optional_int(raw.get("duration_api_ms")),
-        "claude_service_tier": usage.get("service_tier") if usage else None,
-    }
-    return {
-        "usage_source": "claude_cli_reported",
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "estimated_usd": total_cost_usd,
-        "metadata": {key: value for key, value in metadata.items() if value is not None},
-    }
+    return reported_usage_from_stdout(stdout)
 
 
 def _optional_int(value: Any) -> int | None:

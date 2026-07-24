@@ -266,6 +266,13 @@ Install dependencies in the project venv:
 .venv\bin\python.exe -m pip install -r requirements.txt
 ```
 
+`requirements.txt` includes the shared `assistant-toolkit` package from
+`Nuagrinn/assistant-toolkit`. LearnKeeper uses it for infrastructure code that is
+also needed by the reminder bot: speech-to-text providers, constrained Claude
+CLI helpers, and small formatting/config/database primitives. If the toolkit
+repository is private, the VPS user that runs deploy must have GitHub access for
+that dependency.
+
 Fill `.env`:
 
 ```env
@@ -570,6 +577,7 @@ app/
     db.py
     repo.py
     llm.py
+    claude_cli.py   # compatibility wrapper over assistant_toolkit.llm
   features/
     quiz/
       factory.py
@@ -597,9 +605,12 @@ app/
     coding_reps/
       models.py
       service.py
+    speech/         # compatibility wrapper over assistant_toolkit.speech
   adapters/
     telegram/
 ```
 
 Business logic lives in feature services. Telegram is only an adapter over the
-same services.
+same services. Reusable infrastructure should live in `assistant-toolkit`; keep
+LearnKeeper-specific topics, reviews, quiz prompts, keyboards and migrations in
+this repo.
