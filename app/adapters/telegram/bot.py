@@ -574,14 +574,22 @@ async def _answer_long(
     text: str,
     *,
     parse_mode: str | None = ParseMode.HTML,
+    reply_markup=None,
 ) -> None:
     if not update.message:
         return
-    for chunk in split_message(text):
+    chunks = split_message(text)
+    last_index = len(chunks) - 1
+    for index, chunk in enumerate(chunks):
+        message_markup = (
+            reply_markup
+            if reply_markup is not None and index == last_index
+            else _main_keyboard()
+        )
         await update.message.reply_text(
             chunk,
             parse_mode=parse_mode,
-            reply_markup=_main_keyboard(),
+            reply_markup=message_markup,
         )
 
 
@@ -2433,6 +2441,7 @@ async def _show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             empty_text="Активных задач на повторение нет.",
             title="Ближайшие повторы",
         ),
+        reply_markup=_review_tasks_start_keyboard(tasks) if tasks else None,
     )
 
 
@@ -2589,22 +2598,29 @@ def _cancel_review_keyboard(tasks) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _due_tasks_keyboard(tasks) -> InlineKeyboardMarkup:
-    """One "Начать" button per due task - reuses START_REVIEW_PREFIX, the same
-    entry point as the due-notification message, so a postponed/ignored task
-    is not just visible here but actually actionable."""
+def _review_tasks_start_keyboard(tasks) -> InlineKeyboardMarkup:
+    """One start button per review task.
+
+    This reuses START_REVIEW_PREFIX, the same entry point as due notifications,
+    so scheduled tasks can be started manually before due_at when the user wants
+    to repeat earlier.
+    """
     rows: list[list[InlineKeyboardButton]] = []
     for task in tasks:
         label = f"{task.due_at:%d-%m-%Y} · {task.stage}/3 · {task.topic_title}"
         rows.append(
             [
                 InlineKeyboardButton(
-                    _button_label(label),
+                    _button_label(f"Начать: {label}"),
                     callback_data=f"{START_REVIEW_PREFIX}{task.id}",
                 )
             ]
         )
     return InlineKeyboardMarkup(rows)
+
+
+def _due_tasks_keyboard(tasks) -> InlineKeyboardMarkup:
+    return _review_tasks_start_keyboard(tasks)
 
 
 def _confirm_cancel_review_keyboard(task_id: str) -> InlineKeyboardMarkup:
@@ -2976,6 +2992,7 @@ async def menu_schedule_callback(update: Update, context: ContextTypes.DEFAULT_T
             title="Ближайшие повторы",
         ),
         parse_mode=ParseMode.HTML,
+        reply_markup=_review_tasks_start_keyboard(tasks) if tasks else None,
     )
 
 

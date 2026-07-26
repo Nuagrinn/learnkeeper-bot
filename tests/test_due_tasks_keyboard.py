@@ -4,7 +4,11 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.adapters.telegram.bot import START_REVIEW_PREFIX, _due_tasks_keyboard
+from app.adapters.telegram.bot import (
+    START_REVIEW_PREFIX,
+    _due_tasks_keyboard,
+    _review_tasks_start_keyboard,
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,23 @@ class DueTasksKeyboardTest(unittest.TestCase):
             keyboard.inline_keyboard[1][0].callback_data,
         )
         self.assertIn("Слайсы", keyboard.inline_keyboard[0][0].text)
+
+    def test_scheduled_task_can_be_started_before_due_date(self) -> None:
+        tasks = [
+            _FakeTask(
+                id="future-task",
+                topic_title="Надежность систем данных",
+                stage=1,
+                due_at=datetime(2026, 7, 27),
+            )
+        ]
+
+        keyboard = _review_tasks_start_keyboard(tasks)
+
+        button = keyboard.inline_keyboard[0][0]
+        self.assertEqual(f"{START_REVIEW_PREFIX}future-task", button.callback_data)
+        self.assertIn("Начать", button.text)
+        self.assertIn("27-07-2026", button.text)
 
 
 if __name__ == "__main__":
