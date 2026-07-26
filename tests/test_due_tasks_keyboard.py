@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.adapters.telegram.bot import (
+    HIDE_REVIEW_LIST,
     START_REVIEW_PREFIX,
     _due_tasks_keyboard,
     _review_tasks_start_keyboard,
@@ -28,7 +29,7 @@ class DueTasksKeyboardTest(unittest.TestCase):
 
         keyboard = _due_tasks_keyboard(tasks)
 
-        self.assertEqual(2, len(keyboard.inline_keyboard))
+        self.assertEqual(3, len(keyboard.inline_keyboard))
         self.assertEqual(
             f"{START_REVIEW_PREFIX}t1",
             keyboard.inline_keyboard[0][0].callback_data,
@@ -38,6 +39,8 @@ class DueTasksKeyboardTest(unittest.TestCase):
             keyboard.inline_keyboard[1][0].callback_data,
         )
         self.assertIn("Слайсы", keyboard.inline_keyboard[0][0].text)
+        self.assertEqual(HIDE_REVIEW_LIST, keyboard.inline_keyboard[-1][0].callback_data)
+        self.assertEqual("Скрыть", keyboard.inline_keyboard[-1][0].text)
 
     def test_scheduled_task_can_be_started_before_due_date(self) -> None:
         tasks = [
@@ -55,6 +58,7 @@ class DueTasksKeyboardTest(unittest.TestCase):
         self.assertEqual(f"{START_REVIEW_PREFIX}future-task", button.callback_data)
         self.assertIn("Начать", button.text)
         self.assertIn("27-07-2026", button.text)
+        self.assertEqual(HIDE_REVIEW_LIST, keyboard.inline_keyboard[-1][0].callback_data)
 
 
 if __name__ == "__main__":

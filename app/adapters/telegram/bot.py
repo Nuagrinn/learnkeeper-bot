@@ -124,6 +124,7 @@ MENU_IDEAS = "menu_ideas"
 MENU_SETTINGS = "menu_settings"
 MENU_SCHEDULE = "menu_schedule"
 MENU_DUE = "menu_due"
+HIDE_REVIEW_LIST = "hide_review_list"
 TOPIC_BLOCKS = "topic_blocks"
 TOPIC_BLOCK_PREFIX = "topic_block:"
 ABORT_TOPICS = "abort_topics"
@@ -2616,6 +2617,7 @@ def _review_tasks_start_keyboard(tasks) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    rows.append([InlineKeyboardButton("Скрыть", callback_data=HIDE_REVIEW_LIST)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -3016,6 +3018,24 @@ async def menu_due_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode=ParseMode.HTML,
         reply_markup=_due_tasks_keyboard(tasks) if tasks else None,
     )
+
+
+async def hide_review_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    await query.answer("Скрыто")
+    if query.message:
+        with contextlib.suppress(BadRequest):
+            await query.message.delete()
+            return
+    with contextlib.suppress(BadRequest):
+        await query.edit_message_reply_markup(reply_markup=None)
 
 
 async def menu_cancel_reviews_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5830,6 +5850,7 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(abort_read_material_callback, pattern=f"^{ABORT_READ_MATERIAL}$"))
     app.add_handler(CallbackQueryHandler(menu_schedule_callback, pattern=f"^{MENU_SCHEDULE}$"))
     app.add_handler(CallbackQueryHandler(menu_due_callback, pattern=f"^{MENU_DUE}$"))
+    app.add_handler(CallbackQueryHandler(hide_review_list_callback, pattern=f"^{HIDE_REVIEW_LIST}$"))
     app.add_handler(CallbackQueryHandler(menu_cancel_reviews_callback, pattern=f"^{MENU_CANCEL_REVIEWS}$"))
     app.add_handler(CallbackQueryHandler(menu_study_topics_callback, pattern=f"^{MENU_STUDY_TOPICS}$"))
     app.add_handler(CallbackQueryHandler(menu_topic_add_callback, pattern=f"^{MENU_TOPIC_ADD}$"))
