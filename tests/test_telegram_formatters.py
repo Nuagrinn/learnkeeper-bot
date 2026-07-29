@@ -15,6 +15,7 @@ from app.adapters.telegram.formatters import (
     format_mistake_review_preview,
     format_mistake_work_item,
     format_mistake_work_list,
+    format_open_question_answer_preview,
     format_open_question_check_report,
     format_open_question_prompt,
     format_review_created,
@@ -442,6 +443,44 @@ class TelegramFormattersTest(unittest.TestCase):
         self.assertNotIn("###", text)
         self.assertNotIn("**", text)
         self.assertNotIn("```", text)
+
+    def test_format_open_question_answer_preview_requires_confirmation(self) -> None:
+        item = OpenQuestion(
+            id="oq1",
+            topic_id="db05",
+            topic_title="Модели данных",
+            section="Базы данных",
+            quiz_session_id="s1",
+            origin="instant",
+            status="active",
+            question_kind="mini_case",
+            question_text="Вопрос",
+            answer_format_hint="",
+            expected_points=[],
+            rubric=[],
+            source_refs=["database/review.md"],
+            material_fingerprint="fp",
+            material_snapshot={},
+            generator_provider="fake",
+            generator_model="fake",
+            generate_prompt_version="fake",
+            created_at=datetime(2026, 7, 14, 10, 0),
+            updated_at=datetime(2026, 7, 14, 10, 0),
+        )
+
+        text = format_open_question_answer_preview(
+            item,
+            "Я выбрал `document`, потому что **агрегат** читается целиком.",
+            source="text",
+        )
+
+        self.assertIn("Проверь ответ перед отправкой", text)
+        self.assertIn("<b>Тема:</b> Модели данных", text)
+        self.assertIn("<b>Источник:</b> текст", text)
+        self.assertIn("<code>document</code>", text)
+        self.assertIn("<b>агрегат</b>", text)
+        self.assertIn("только после подтверждения кнопкой", text)
+        self.assertNotIn("**", text)
 
     def test_format_open_question_check_report_renders_markdown(self) -> None:
         question = OpenQuestion(

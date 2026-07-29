@@ -5,6 +5,7 @@ import contextlib
 import html
 import logging
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time as datetime_time
 from pathlib import Path
@@ -41,6 +42,7 @@ from app.adapters.telegram.formatters import (
     format_mistake_work_created,
     format_mistake_work_item,
     format_mistake_work_list,
+    format_open_question_answer_preview,
     format_open_question_check_report,
     format_open_question_item,
     format_open_question_list,
@@ -125,6 +127,7 @@ MENU_SETTINGS = "menu_settings"
 MENU_SCHEDULE = "menu_schedule"
 MENU_DUE = "menu_due"
 HIDE_REVIEW_LIST = "hide_review_list"
+HIDE_MESSAGE_PREFIX = "hide_message:"
 TOPIC_BLOCKS = "topic_blocks"
 TOPIC_BLOCK_PREFIX = "topic_block:"
 ABORT_TOPICS = "abort_topics"
@@ -169,6 +172,9 @@ OPEN_QUESTION_FROM_QUIZ_PREFIX = "open_question_quiz:"
 OPEN_QUESTION_SKIP_PREFIX = "open_question_skip:"
 OPEN_QUESTION_OPEN_PREFIX = "open_question_open:"
 OPEN_QUESTION_DELETE_PREFIX = "open_question_delete:"
+OPEN_QUESTION_CONFIRM_PREFIX = "open_question_confirm:"
+OPEN_QUESTION_EDIT_PREFIX = "open_question_edit:"
+OPEN_QUESTION_CANCEL_PREVIEW_PREFIX = "open_question_cancel_preview:"
 ABORT_OPEN_QUESTION = "abort_open_question"
 MENU_OPEN_QUESTIONS = "menu_open_questions"
 MENU_OPEN_QUESTIONS_ANSWERED = "menu_open_questions_answered"
@@ -279,6 +285,10 @@ MENU_BUTTONS = {
 LAST_NOTIFIED_VERSION_KEY = "app_version_last_notified"
 LLM_BUDGET_ALERT_KEY = "llm_budget_alert_level"
 CHANGELOG_LIMIT = 8
+OPEN_QUESTION_PENDING_ANSWER_KEY = "pending_open_question_answer"
+HIDE_MESSAGE_GROUPS_KEY = "hide_message_groups"
+HIDE_MESSAGE_CURRENT = f"{HIDE_MESSAGE_PREFIX}current"
+MAX_HIDE_MESSAGE_GROUPS = 20
 
 
 class AppServices:
@@ -600,9 +610,10 @@ async def _edit_or_reply(
     text: str,
     *,
     parse_mode: str | None = None,
+    reply_markup=None,
 ):
     try:
-        return await message.edit_text(text, parse_mode=parse_mode)
+        return await message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
     except BadRequest as exc:
         if "Message is not modified" in str(exc):
             return message
@@ -612,7 +623,7 @@ async def _edit_or_reply(
         return await update.message.reply_text(
             text,
             parse_mode=parse_mode,
-            reply_markup=_main_keyboard(),
+            reply_markup=reply_markup or _main_keyboard(),
         )
 
 
@@ -632,6 +643,67 @@ async def _safe_query_edit(query, text: str, *, parse_mode: str | None = None, r
         )
     except BadRequest as exc:
         log.warning("Could not edit callback message, probably stale: %s", exc)
+
+
+def _message_chat_id(message) -> int | str | None:
+    chat_id = getattr(message, "chat_id", None)
+    if chat_id is not None:
+        return chat_id
+    chat = getattr(message, "chat", None)
+    return getattr(chat, "id", None)
+
+
+def _message_id(message) -> int | None:
+    value = getattr(message, "message_id", None)
+    return int(value) if value is not None else None
+
+
+def _message_from_edit_result(result, fallback):
+    return result if hasattr(result, "message_id") else fallback
+
+
+async def _edit_or_reply_to_anchor(anchor_message, message, text: str, *, reply_markup=None):
+    try:
+        result = await message.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+        return _message_from_edit_result(result, message)
+    except BadRequest as exc:
+        if "Message is not modified" in str(exc):
+            return message
+        log.warning("Could not edit Telegram message, sending a new one: %s", exc)
+        return await anchor_message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+
+
+def _store_hide_message_group(
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: str,
+    messages: list,
+) -> bool:
+    messages = [message for message in messages if message is not None]
+    if not messages:
+        return False
+    chat_id = _message_chat_id(messages[0])
+    message_ids = [
+        message_id
+        for message_id in (_message_id(message) for message in messages)
+        if message_id is not None
+    ]
+    if chat_id is None or not message_ids:
+        return False
+
+    groups = context.user_data.setdefault(HIDE_MESSAGE_GROUPS_KEY, {})
+    groups[group_id] = {"chat_id": chat_id, "message_ids": message_ids}
+    while len(groups) > MAX_HIDE_MESSAGE_GROUPS:
+        oldest = next(iter(groups))
+        groups.pop(oldest, None)
+    return True
 
 
 async def _reject_non_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -971,7 +1043,11 @@ def _open_question_list_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _open_question_item_keyboard(item: OpenQuestion) -> InlineKeyboardMarkup:
+def _open_question_item_keyboard(
+    item: OpenQuestion,
+    *,
+    hide_callback_data: str = HIDE_MESSAGE_CURRENT,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if item.status == "active":
         rows.append(
@@ -991,7 +1067,33 @@ def _open_question_item_keyboard(item: OpenQuestion) -> InlineKeyboardMarkup:
         ]
     )
     rows.append([InlineKeyboardButton("К открытым вопросам", callback_data=MENU_OPEN_QUESTIONS)])
+    rows.append([InlineKeyboardButton("Скрыть", callback_data=hide_callback_data)])
     return InlineKeyboardMarkup(rows)
+
+
+def _open_question_answer_preview_keyboard(draft_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Отправить на проверку",
+                    callback_data=f"{OPEN_QUESTION_CONFIRM_PREFIX}{draft_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Редактировать",
+                    callback_data=f"{OPEN_QUESTION_EDIT_PREFIX}{draft_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Отменить",
+                    callback_data=f"{OPEN_QUESTION_CANCEL_PREVIEW_PREFIX}{draft_id}",
+                )
+            ],
+        ]
+    )
 
 
 def _mistake_work_menu_keyboard() -> InlineKeyboardMarkup:
@@ -3046,6 +3148,36 @@ async def hide_review_list_callback(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_reply_markup(reply_markup=None)
 
 
+async def hide_message_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    group_id = (query.data or "").removeprefix(HIDE_MESSAGE_PREFIX).strip()
+    groups = context.user_data.setdefault(HIDE_MESSAGE_GROUPS_KEY, {})
+    group = groups.pop(group_id, None)
+    await query.answer("Скрыто")
+    if isinstance(group, dict):
+        chat_id = group.get("chat_id")
+        message_ids = group.get("message_ids")
+        if chat_id is not None and isinstance(message_ids, list):
+            for message_id in message_ids:
+                with contextlib.suppress(Exception):
+                    await context.bot.delete_message(chat_id=chat_id, message_id=int(message_id))
+            return
+
+    if query.message:
+        with contextlib.suppress(BadRequest):
+            await query.message.delete()
+            return
+    with contextlib.suppress(BadRequest):
+        await query.edit_message_reply_markup(reply_markup=None)
+
+
 async def menu_cancel_reviews_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -3931,6 +4063,7 @@ async def open_question_from_quiz_callback(update: Update, context: ContextTypes
     finally:
         await _stop_animation_task(animation_task)
 
+    _clear_pending_open_question_answer(context)
     context.user_data["awaiting_open_question_id"] = item.id
     await _safe_query_edit(
         query,
@@ -3957,6 +4090,7 @@ async def open_question_skip_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("Сессия теста не найдена.", show_alert=True)
         return
 
+    _clear_pending_open_question_answer(context)
     context.user_data["awaiting_open_question_id"] = ""
     await query.answer("Открытый вопрос пропущен")
     with contextlib.suppress(BadRequest):
@@ -4015,6 +4149,7 @@ async def _generate_open_question_for_topic(
     finally:
         await _stop_animation_task(animation_task)
 
+    _clear_pending_open_question_answer(context)
     context.user_data["awaiting_open_question_id"] = item.id
     await _safe_query_edit(
         query,
@@ -4041,6 +4176,7 @@ async def open_question_open_callback(update: Update, context: ContextTypes.DEFA
     attempt = services.open_questions.latest_attempt(item.id)
     await query.answer()
     if item.status == "active":
+        _clear_pending_open_question_answer(context)
         context.user_data["awaiting_open_question_id"] = item.id
         await query.edit_message_text(
             format_open_question_prompt(item),
@@ -4068,11 +4204,122 @@ async def open_question_delete_callback(update: Update, context: ContextTypes.DE
     except ValueError:
         await query.answer("Вопрос не найден.", show_alert=True)
         return
+    _clear_pending_open_question_answer(context)
+    context.user_data["awaiting_open_question_id"] = ""
     await query.answer("Удалено")
     await query.edit_message_text(
         "<b>Открытый вопрос удален</b>\n\n"
         f"{html.escape(item.topic_title, quote=False)}",
         parse_mode=ParseMode.HTML,
+    )
+
+
+async def open_question_confirm_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    question_id, draft_id = _parse_open_question_preview_payload(
+        query.data or "",
+        OPEN_QUESTION_CONFIRM_PREFIX,
+    )
+    pending = _pending_open_question_answer(
+        context,
+        question_id=question_id,
+        draft_id=draft_id,
+    )
+    if not pending:
+        await query.answer("Это старое превью. Подтверди последнее или отправь ответ заново.", show_alert=True)
+        return
+    if not query.message:
+        await query.answer("Не нашел сообщение с превью.", show_alert=True)
+        return
+
+    answer_text = str(pending.get("answer_text") or "").strip()
+    source = str(pending.get("source") or "text")
+    _clear_pending_open_question_answer(context)
+    context.user_data["awaiting_open_question_id"] = ""
+    await query.answer("Отправляю на проверку")
+    await _check_open_question_answer(
+        query.message,
+        context,
+        question_id,
+        answer_text,
+        source=source,
+        wait_message=query.message,
+    )
+
+
+async def open_question_edit_answer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    question_id, draft_id = _parse_open_question_preview_payload(
+        query.data or "",
+        OPEN_QUESTION_EDIT_PREFIX,
+    )
+    pending = _pending_open_question_answer(
+        context,
+        question_id=question_id,
+        draft_id=draft_id,
+    )
+    if not pending:
+        await query.answer("Это старое превью. Используй последнее или отправь ответ заново.", show_alert=True)
+        return
+    item = _services(context).open_questions.get_question(question_id)
+    if not item:
+        await query.answer("Вопрос не найден.", show_alert=True)
+        return
+
+    _clear_pending_open_question_answer(context)
+    context.user_data["awaiting_open_question_id"] = question_id
+    await query.answer("Жду исправленный ответ")
+    await query.edit_message_text(
+        format_open_question_prompt(item),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def open_question_cancel_preview_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    owner_id = _owner_id(context)
+    if not query.from_user or query.from_user.id != owner_id:
+        await query.answer("Это личный бот LearnKeeper.", show_alert=True)
+        return
+
+    question_id, draft_id = _parse_open_question_preview_payload(
+        query.data or "",
+        OPEN_QUESTION_CANCEL_PREVIEW_PREFIX,
+    )
+    pending = _pending_open_question_answer(
+        context,
+        question_id=question_id,
+        draft_id=draft_id,
+    )
+    if not pending:
+        await query.answer("Это старое превью.", show_alert=True)
+        return
+    _clear_pending_open_question_answer(context)
+    context.user_data["awaiting_open_question_id"] = ""
+    await query.answer("Отменено")
+    await query.edit_message_text(
+        "<b>Отправка ответа отменена</b>\n\n"
+        "Открытый вопрос остался без ответа. Его можно открыть позже из списка.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("К открытым вопросам", callback_data=MENU_OPEN_QUESTIONS)]]
+        ),
     )
 
 
@@ -4084,6 +4331,7 @@ async def abort_open_question_callback(update: Update, context: ContextTypes.DEF
     if not query.from_user or query.from_user.id != owner_id:
         await query.answer("Это личный бот LearnKeeper.", show_alert=True)
         return
+    _clear_pending_open_question_answer(context)
     context.user_data["awaiting_open_question_id"] = ""
     await query.answer("Ок")
     await query.edit_message_text("Открытый вопрос отменен.")
@@ -5281,24 +5529,171 @@ async def _process_open_question_answer(
 ) -> None:
     if not update.message:
         return
+    await _send_open_question_answer_preview(
+        update,
+        context,
+        question_id,
+        answer_text,
+        source=source,
+    )
+
+
+def _set_pending_open_question_answer(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    question_id: str,
+    answer_text: str,
+    source: str,
+    draft_id: str,
+) -> None:
+    context.user_data[OPEN_QUESTION_PENDING_ANSWER_KEY] = {
+        "question_id": question_id,
+        "answer_text": answer_text,
+        "source": source,
+        "draft_id": draft_id,
+    }
+    context.user_data["awaiting_open_question_id"] = question_id
+
+
+def _clear_pending_open_question_answer(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(OPEN_QUESTION_PENDING_ANSWER_KEY, None)
+
+
+def _pending_open_question_answer(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    question_id: str,
+    draft_id: str,
+) -> dict | None:
+    pending = context.user_data.get(OPEN_QUESTION_PENDING_ANSWER_KEY)
+    if not isinstance(pending, dict):
+        return None
+    if question_id and pending.get("question_id") != question_id:
+        return None
+    if pending.get("draft_id") != draft_id:
+        return None
+    answer_text = str(pending.get("answer_text") or "").strip()
+    if not answer_text:
+        return None
+    return pending
+
+
+def _parse_open_question_preview_payload(data: str, prefix: str) -> tuple[str, str]:
+    payload = data.removeprefix(prefix).strip()
+    question_id, separator, draft_id = payload.partition(":")
+    if not separator:
+        return "", question_id.strip()
+    return question_id.strip(), draft_id.strip()
+
+
+async def _send_open_question_answer_preview(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    question_id: str,
+    answer_text: str,
+    *,
+    source: str,
+    wait_message=None,
+) -> None:
+    if not update.message:
+        return
     services = _services(context)
     item = services.open_questions.get_question(question_id)
     if not item:
+        _clear_pending_open_question_answer(context)
+        context.user_data["awaiting_open_question_id"] = ""
         await _answer_long(update, "Открытый вопрос уже не найден. Создай новый вопрос.")
         return
     if item.status != "active":
+        _clear_pending_open_question_answer(context)
+        context.user_data["awaiting_open_question_id"] = ""
         attempt = services.open_questions.latest_attempt(item.id)
-        await _answer_long(update, format_open_question_item(item, attempt))
+        await _answer_long(
+            update,
+            format_open_question_item(item, attempt),
+            reply_markup=_open_question_item_keyboard(item),
+        )
         return
 
-    wait_message = await update.message.reply_text(
-        _open_question_wait_text(
-            title=item.topic_title,
-            action="Проверяю открытый ответ",
-            frame=GENERATION_FRAMES[0],
-        ),
-        parse_mode=ParseMode.HTML,
+    clean_answer = answer_text.strip()
+    if not clean_answer:
+        await _answer_long(update, "Ответ пустой. Отправь текст или голосовое еще раз.")
+        return
+
+    draft_id = uuid.uuid4().hex[:8]
+    _set_pending_open_question_answer(
+        context,
+        question_id=item.id,
+        answer_text=clean_answer,
+        source=source,
+        draft_id=draft_id,
     )
+    chunks = split_message(
+        format_open_question_answer_preview(item, clean_answer, source=source)
+    )
+    keyboard = _open_question_answer_preview_keyboard(draft_id)
+    last = len(chunks) - 1
+    if wait_message is not None:
+        await _edit_or_reply(
+            update,
+            wait_message,
+            chunks[0],
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard if last == 0 else None,
+        )
+    else:
+        await update.message.reply_text(
+            chunks[0],
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard if last == 0 else None,
+        )
+    for index in range(1, len(chunks)):
+        await update.message.reply_text(
+            chunks[index],
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard if index == last else None,
+        )
+
+
+async def _check_open_question_answer(
+    anchor_message,
+    context: ContextTypes.DEFAULT_TYPE,
+    question_id: str,
+    answer_text: str,
+    *,
+    source: str,
+    wait_message=None,
+) -> None:
+    services = _services(context)
+    item = services.open_questions.get_question(question_id)
+    if not item:
+        await anchor_message.reply_text("Открытый вопрос уже не найден. Создай новый вопрос.")
+        return
+    if item.status != "active":
+        attempt = services.open_questions.latest_attempt(item.id)
+        await anchor_message.reply_text(
+            format_open_question_item(item, attempt),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_open_question_item_keyboard(item),
+        )
+        return
+
+    wait_text = _open_question_wait_text(
+        title=item.topic_title,
+        action="Проверяю открытый ответ",
+        frame=GENERATION_FRAMES[0],
+    )
+    if wait_message is None:
+        wait_message = await anchor_message.reply_text(
+            wait_text,
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        wait_message = await _edit_or_reply_to_anchor(
+            anchor_message,
+            wait_message,
+            wait_text,
+        )
     animation_task = asyncio.create_task(
         _animate_open_question_reply_message(
             wait_message,
@@ -5323,8 +5718,8 @@ async def _process_open_question_answer(
     except (OpenQuestionAgentError, ValueError) as exc:
         await _stop_animation_task(animation_task)
         log.warning("Open question check failed question_id=%s error=%s", item.id, exc)
-        await _finish_explain_check_message(
-            update,
+        await _edit_or_reply_to_anchor(
+            anchor_message,
             wait_message,
             _generation_error_text(
                 exc,
@@ -5336,8 +5731,8 @@ async def _process_open_question_answer(
     except Exception as exc:
         await _stop_animation_task(animation_task)
         log.exception("Open question check failed unexpectedly question_id=%s", item.id)
-        await _finish_explain_check_message(
-            update,
+        await _edit_or_reply_to_anchor(
+            anchor_message,
             wait_message,
             "<b>Не удалось проверить открытый ответ</b>\n\n"
             f"Причина: {html.escape(str(exc), quote=False)}",
@@ -5353,19 +5748,52 @@ async def _process_open_question_answer(
         attempt.layer_reached,
     )
     chunks = split_message(format_open_question_check_report(question, attempt))
+    await _send_open_question_check_report_chunks(
+        anchor_message,
+        context,
+        wait_message,
+        question,
+        chunks,
+    )
+
+
+async def _send_open_question_check_report_chunks(
+    anchor_message,
+    context: ContextTypes.DEFAULT_TYPE,
+    wait_message,
+    question: OpenQuestion,
+    chunks: list[str],
+) -> None:
+    if not chunks:
+        return
+    group_id = uuid.uuid4().hex[:12]
+    hide_callback_data = f"{HIDE_MESSAGE_PREFIX}{group_id}"
+    keyboard = _open_question_item_keyboard(
+        question,
+        hide_callback_data=hide_callback_data,
+    )
+    sent_messages: list = []
     last = len(chunks) - 1
-    await _finish_explain_check_message(
-        update,
+    first_message = await _edit_or_reply_to_anchor(
+        anchor_message,
         wait_message,
         chunks[0],
-        reply_markup=_open_question_item_keyboard(question) if last == 0 else None,
+        reply_markup=keyboard if last == 0 else None,
     )
+    sent_messages.append(first_message)
     for index in range(1, len(chunks)):
         with contextlib.suppress(Exception):
-            await update.message.reply_text(
+            sent = await anchor_message.reply_text(
                 chunks[index],
                 parse_mode=ParseMode.HTML,
-                reply_markup=_open_question_item_keyboard(question) if index == last else None,
+                reply_markup=keyboard if index == last else None,
+            )
+            sent_messages.append(sent)
+    if not _store_hide_message_group(context, group_id, sent_messages):
+        with contextlib.suppress(Exception):
+            last_message = sent_messages[-1] if sent_messages else first_message
+            await last_message.edit_reply_markup(
+                reply_markup=_open_question_item_keyboard(question)
             )
 
 
@@ -5487,16 +5915,23 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     context.user_data["awaiting_study_topic"] = False
     context.user_data["awaiting_explanation_topic_id"] = ""
     context.user_data["awaiting_explanation_then_task_id"] = ""
-    context.user_data["awaiting_open_question_id"] = ""
-    await _edit_or_reply(
-        update,
-        wait_message,
-        f"<b>Распознал:</b> {html.escape(query, quote=False)}\n\nОбрабатываю...",
-        parse_mode=ParseMode.HTML,
-    )
     if awaiting_study:
+        context.user_data["awaiting_open_question_id"] = ""
+        await _edit_or_reply(
+            update,
+            wait_message,
+            f"<b>Распознал:</b> {html.escape(query, quote=False)}\n\nОбрабатываю...",
+            parse_mode=ParseMode.HTML,
+        )
         await _create_topic_inbox_item(update, context, query, source="voice")
     elif awaiting_explanation_topic_id:
+        context.user_data["awaiting_open_question_id"] = ""
+        await _edit_or_reply(
+            update,
+            wait_message,
+            f"<b>Распознал:</b> {html.escape(query, quote=False)}\n\nОбрабатываю...",
+            parse_mode=ParseMode.HTML,
+        )
         await _process_explanation_check(
             update,
             context,
@@ -5506,12 +5941,13 @@ async def menu_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             follow_up_task_id=follow_up_task_id,
         )
     elif awaiting_open_question_id:
-        await _process_open_question_answer(
+        await _send_open_question_answer_preview(
             update,
             context,
             awaiting_open_question_id,
             query,
             source="voice",
+            wait_message=wait_message,
         )
     else:
         await _show_review_blocks(update, context)
@@ -5549,7 +5985,6 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     if awaiting_open_question_id and text not in MENU_BUTTONS:
-        context.user_data["awaiting_open_question_id"] = ""
         await _process_open_question_answer(
             update,
             context,
@@ -5564,6 +5999,7 @@ async def menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["awaiting_explanation_topic_id"] = ""
     context.user_data["awaiting_explanation_then_task_id"] = ""
     context.user_data["awaiting_open_question_id"] = ""
+    _clear_pending_open_question_answer(context)
     if text in (BTN_TOPICS, "Темы"):
         await _show_topics(update, context)
         return
@@ -5871,6 +6307,7 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(menu_schedule_callback, pattern=f"^{MENU_SCHEDULE}$"))
     app.add_handler(CallbackQueryHandler(menu_due_callback, pattern=f"^{MENU_DUE}$"))
     app.add_handler(CallbackQueryHandler(hide_review_list_callback, pattern=f"^{HIDE_REVIEW_LIST}$"))
+    app.add_handler(CallbackQueryHandler(hide_message_callback, pattern=f"^{HIDE_MESSAGE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(menu_cancel_reviews_callback, pattern=f"^{MENU_CANCEL_REVIEWS}$"))
     app.add_handler(CallbackQueryHandler(menu_study_topics_callback, pattern=f"^{MENU_STUDY_TOPICS}$"))
     app.add_handler(CallbackQueryHandler(menu_topic_add_callback, pattern=f"^{MENU_TOPIC_ADD}$"))
@@ -5923,6 +6360,14 @@ def build_application(settings: Settings, services: AppServices) -> Application:
     app.add_handler(CallbackQueryHandler(open_question_skip_callback, pattern=f"^{OPEN_QUESTION_SKIP_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_open_callback, pattern=f"^{OPEN_QUESTION_OPEN_PREFIX}"))
     app.add_handler(CallbackQueryHandler(open_question_delete_callback, pattern=f"^{OPEN_QUESTION_DELETE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_confirm_answer_callback, pattern=f"^{OPEN_QUESTION_CONFIRM_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(open_question_edit_answer_callback, pattern=f"^{OPEN_QUESTION_EDIT_PREFIX}"))
+    app.add_handler(
+        CallbackQueryHandler(
+            open_question_cancel_preview_callback,
+            pattern=f"^{OPEN_QUESTION_CANCEL_PREVIEW_PREFIX}",
+        )
+    )
     app.add_handler(CallbackQueryHandler(abort_open_question_callback, pattern=f"^{ABORT_OPEN_QUESTION}$"))
     app.add_handler(CallbackQueryHandler(quiz_size_callback, pattern=f"^{QUIZ_SIZE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(abort_quiz_size_callback, pattern=f"^{ABORT_QUIZ_SIZE}$"))

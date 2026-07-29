@@ -502,6 +502,34 @@ def format_open_question_prompt(item: OpenQuestion) -> str:
     return "\n".join(lines)
 
 
+def format_open_question_answer_preview(
+    item: OpenQuestion,
+    answer_text: str,
+    *,
+    source: str,
+) -> str:
+    source_label = "голос" if source == "voice" else "текст"
+    clipped = _clip(answer_text.strip(), 3000)
+    lines = [
+        "<b>Проверь ответ перед отправкой</b>",
+        "",
+        f"<b>Тема:</b> {_h(item.topic_title)}",
+        f"<b>Источник:</b> {_h(source_label)}",
+        "",
+        "<b>Твой ответ</b>",
+        _rich(clipped),
+    ]
+    if clipped != answer_text.strip():
+        lines.extend(["", "<i>Превью укорочено, на проверку уйдет полный ответ.</i>"])
+    lines.extend(
+        [
+            "",
+            "<i>Проверка начнется только после подтверждения кнопкой.</i>",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def format_open_question_check_report(
     question: OpenQuestion,
     attempt: OpenQuestionAttempt,
