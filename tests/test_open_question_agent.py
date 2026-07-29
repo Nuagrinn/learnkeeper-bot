@@ -8,6 +8,8 @@ from app.features.open_questions.agent import (
     ClaudeCliOpenQuestionAgent,
     OpenQuestionCheckInput,
     OpenQuestionGenerationInput,
+    _check_system_prompt,
+    _generation_system_prompt,
 )
 
 
@@ -55,6 +57,14 @@ def _check_request() -> OpenQuestionCheckInput:
 
 
 class ClaudeCliOpenQuestionAgentTest(unittest.TestCase):
+    def test_system_prompts_prefer_russian_terminology(self) -> None:
+        for prompt in (_generation_system_prompt(), _check_system_prompt()):
+            self.assertIn("Язык пользовательского текста: русский", prompt)
+            self.assertIn("параметры нагрузки (load parameters)", prompt)
+            self.assertIn("разветвление/раздача на получателей (fan-out)", prompt)
+            self.assertIn("инструкция реагирования (runbook)", prompt)
+            self.assertIn("пробный прогон (dry-run)", prompt)
+
     def test_generation_repairs_markdown_json_without_source_refs(self) -> None:
         def run_command(cmd, **kwargs):
             payload = {
