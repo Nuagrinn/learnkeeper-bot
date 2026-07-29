@@ -171,6 +171,42 @@ class ReviewTaskServiceTest(unittest.TestCase):
         self.assertEqual([], same_day)
         self.assertEqual([task.id], [item.id for item in next_day])
 
+    def test_due_for_notification_skips_recent_active_quiz_session(self) -> None:
+        task = self.service.create_review_task(
+            "Python GIL",
+            now=self.now,
+            initial_due_days=-1,
+        ).task
+        notify_at = datetime(2026, 7, 4, 9, 0, 0)
+        self._insert_quiz_session(
+            task.id,
+            topic_id=task.topic_id,
+            status="in_progress",
+            started_at=notify_at - timedelta(minutes=30),
+        )
+
+        due = self.service.due_for_notification(now=notify_at)
+
+        self.assertEqual([], due)
+
+    def test_due_for_notification_allows_stale_active_quiz_session(self) -> None:
+        task = self.service.create_review_task(
+            "Python GIL",
+            now=self.now,
+            initial_due_days=-1,
+        ).task
+        notify_at = datetime(2026, 7, 4, 9, 0, 0)
+        self._insert_quiz_session(
+            task.id,
+            topic_id=task.topic_id,
+            status="in_progress",
+            started_at=notify_at - timedelta(days=2),
+        )
+
+        due = self.service.due_for_notification(now=notify_at)
+
+        self.assertEqual([task.id], [item.id for item in due])
+
     def test_complete_success_advances_stage(self) -> None:
         task = self.service.create_review_task("Python GIL", now=self.now).task
 
@@ -206,6 +242,39 @@ class ReviewTaskServiceTest(unittest.TestCase):
 
         self.assertEqual(CANCELLED, cancelled.status)
         self.assertEqual([], self.service.upcoming())
+
+    def _insert_quiz_session(
+        self,
+        task_id: str,
+        *,
+        topic_id: str,
+        status: str,
+        started_at: datetime,
+    ) -> None:
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                INSERT INTO quiz_sessions (
+                    id, task_id, topic_id, topic_title, session_type, status,
+                    question_count, current_question_no, started_at,
+                    material_fingerprint, material_snapshot_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"session-{started_at:%Y%m%d%H%M%S}",
+                    task_id,
+                    topic_id,
+                    "Python GIL",
+                    "review",
+                    status,
+                    1,
+                    1,
+                    started_at.isoformat(timespec="seconds"),
+                    "fingerprint",
+                    "{}",
+                ),
+            )
 
 
 if __name__ == "__main__":

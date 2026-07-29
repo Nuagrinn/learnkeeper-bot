@@ -21,6 +21,8 @@ CANCELLED = "cancelled"
 STAGE_INTERVALS = {1: 1, 2: 7, 3: 30}
 MIN_TOPIC_MATCH_SCORE = 50
 DEFAULT_DUE_TIME = time(hour=9)
+ACTIVE_QUIZ_STATUS = "in_progress"
+ACTIVE_QUIZ_NOTIFICATION_GRACE = timedelta(hours=24)
 
 
 class TopicNotReadyError(ValueError):
@@ -259,6 +261,7 @@ class ReviewTaskService:
     ) -> list[ReviewTask]:
         now = (now or _now()).replace(microsecond=0)
         today = now.date().isoformat()
+        active_since = (now - ACTIVE_QUIZ_NOTIFICATION_GRACE).isoformat(timespec="seconds")
         return self._select_tasks(
             """
             WHERE rt.status = ?
@@ -267,10 +270,24 @@ class ReviewTaskService:
                     rt.last_notified_at IS NULL
                     OR substr(rt.last_notified_at, 1, 10) < ?
                   )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM quiz_sessions qs
+                    WHERE qs.task_id = rt.id
+                      AND qs.status = ?
+                      AND qs.started_at >= ?
+                  )
             ORDER BY rt.due_at ASC
             LIMIT ?
             """,
-            (ACTIVE, now.isoformat(timespec="seconds"), today, limit),
+            (
+                ACTIVE,
+                now.isoformat(timespec="seconds"),
+                today,
+                ACTIVE_QUIZ_STATUS,
+                active_since,
+                limit,
+            ),
         )
 
     def mark_notified(self, task_id: str, *, now: datetime | None = None) -> ReviewTask:

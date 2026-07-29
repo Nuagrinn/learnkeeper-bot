@@ -1802,6 +1802,14 @@ def _review_ready_after_explain_text(topic_title: str) -> str:
     )
 
 
+def _review_already_in_progress_text(topic_title: str) -> str:
+    return (
+        "<b>Тест уже идет</b>\n\n"
+        f"По теме «{html.escape(topic_title, quote=False)}» уже открыт вопрос. "
+        "Продолжай отвечать в сообщении с тестом выше."
+    )
+
+
 def _review_ready_after_explain_keyboard(task_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -4100,6 +4108,14 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("Задача не найдена. Возможно, она уже устарела.")
         return
 
+    if services.quiz.active_session_for_task(task.id):
+        services.review_tasks.mark_notified(task.id, now=datetime.now())
+        await query.edit_message_text(
+            _review_already_in_progress_text(task.topic_title),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     await query.edit_message_text(
         _review_explain_choice_text(task.topic_title),
         parse_mode=ParseMode.HTML,
@@ -5652,6 +5668,10 @@ async def notify_due_reviews(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     for task in tasks:
+        if services.quiz.active_session_for_task(task.id):
+            services.review_tasks.mark_notified(task.id, now=datetime.now())
+            log.info("Skipped due notification for active quiz task_id=%s", task.id)
+            continue
         keyboard = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("Начать тест", callback_data=f"{START_REVIEW_PREFIX}{task.id}")],

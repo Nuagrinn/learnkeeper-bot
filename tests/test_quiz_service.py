@@ -86,6 +86,16 @@ class QuizServiceTest(unittest.TestCase):
         self.assertEqual(first.session.id, second.session.id)
         self.assertEqual(3, second.session.question_count)
 
+    def test_start_session_marks_task_notified_for_same_day(self) -> None:
+        started_at = datetime(2026, 7, 4, 8, 30, 0)
+
+        self.quiz.start_session(self.task.id, question_count=3, now=started_at)
+
+        task = self.review_tasks.get_task(self.task.id)
+        self.assertEqual(started_at, task.last_notified_at)
+        due = self.review_tasks.due_for_notification(now=datetime(2026, 7, 4, 9, 0, 0))
+        self.assertEqual([], due)
+
     def test_pull_before_quiz_refreshes_repo_on_start(self) -> None:
         quiz = QuizService(
             self.db,

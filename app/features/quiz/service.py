@@ -91,6 +91,7 @@ class QuizService:
         if task.status != ACTIVE:
             raise ValueError(f"Review task {task_id} is not active")
 
+        self.review_tasks.mark_notified(task.id, now=now)
         existing = self._active_session_for_task(task_id)
         if existing:
             log.info(
@@ -296,6 +297,9 @@ class QuizService:
                 (session_id,),
             ).fetchall()
         return [quiz_answer_from_row(row) for row in rows]
+
+    def active_session_for_task(self, task_id: str) -> QuizSession | None:
+        return self._active_session_for_task(task_id)
 
     def _active_session_for_task(self, task_id: str) -> QuizSession | None:
         with self.db.session() as conn:
