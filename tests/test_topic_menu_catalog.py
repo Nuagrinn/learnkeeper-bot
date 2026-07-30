@@ -28,13 +28,13 @@ class _Repo:
                 trainable=False,
             ),
             RepoTopic(
-                id="db10",
+                id="ddia03",
                 title="Storage and Retrieval",
                 status="ready",
                 section="Книги / DDIA",
                 kind="chapter",
                 trainable=True,
-                source_paths=["database/10-storage-retrieval/review.md"],
+                source_paths=["books/ddia/03-storage-retrieval/review.md"],
             ),
             RepoTopic(
                 id="b03",
@@ -65,7 +65,7 @@ class TopicMenuCatalogTest(unittest.TestCase):
 
         self.assertNotIn("Книги", grouped)
         self.assertNotIn("notes", grouped)
-        self.assertEqual(["db10"], [topic.id for topic in grouped["Книги / DDIA"]])
+        self.assertEqual(["ddia03"], [topic.id for topic in grouped["Книги / DDIA"]])
         self.assertEqual(["b03"], [topic.id for topic in grouped["Базовый Go"]])
 
     def test_section_tree_builds_nested_book_navigation(self) -> None:
@@ -78,7 +78,7 @@ class TopicMenuCatalogTest(unittest.TestCase):
         selection = _section_selection(grouped, "0.0")
         assert selection is not None
         node, _path = selection
-        self.assertEqual(["db10"], [topic.id for topic in _section_topics(node)])
+        self.assertEqual(["ddia03"], [topic.id for topic in _section_topics(node)])
 
     def test_topic_root_keyboard_counts_books_not_book_topics(self) -> None:
         grouped = _all_topics_by_section(_Services())

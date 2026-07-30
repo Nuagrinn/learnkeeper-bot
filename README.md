@@ -101,7 +101,7 @@ LearnKeeper treats `lk-prep` as a small catalog graph, not only as a flat
 - Supported nested index tables can expose child learning units. The first
   supported shape is a book chapter table with columns like
   `Topic id`, `Глава`, `Разбор`, `Материал`, `Статус`.
-- Child rows become normal trainable topics, for example `DB10` under
+- Child rows become normal trainable topics, for example `DDIA03` under
   `Книги / DDIA`, while preserving stable ids for review tasks and statistics.
 - Quiz and open-question agents receive catalog context (`topic_kind`,
   `parent_title`, `catalog_path`) together with material frontmatter metadata.
